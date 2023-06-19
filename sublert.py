@@ -24,7 +24,7 @@ else:
 from config import *
 import time
 
-version = "1.4.7"
+version = "1.4.8"
 requests.packages.urllib3.disable_warnings()
 
 def banner():
@@ -93,6 +93,7 @@ def domain_sanity_check(domain): #Verify the domain name sanity
     else:
         pass
 
+
 def slack(data): #posting to Slack
     webhook_url = posting_webhook
     slack_data = {'text': data}
@@ -106,6 +107,12 @@ def slack(data): #posting to Slack
         errorlog(error, enable_logging)
     if slack_sleep_enabled:
         time.sleep(1)
+
+
+def send_healthcheck_to_slack():
+    HEALTHCHECK_MESSAGE = 'Sublert is running.'
+    slack(HEALTHCHECK_MESSAGE)
+
 
 def reset(do_reset): #clear the monitored list of domains and remove all locally stored files
     if do_reset:
@@ -394,8 +401,6 @@ def posting_to_slack(result, dns_resolve, dns_output): #sending result to slack 
 
     else:
         if not domain_to_monitor:
-            data = "{}:-1: We couldn't find any new valid subdomains.".format(at_channel())
-            slack(data)
             print(colored("\n[!] Done. ", "green"))
             os.system("rm -f ./output/*_tmp.txt")
         else: pass
