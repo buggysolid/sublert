@@ -333,8 +333,6 @@ def dns_resolution(new_subdomains): #Perform DNS resolution on retrieved subdoma
             pass
     if dns_results:
         return posting_to_slack(None, True, dns_results) #Slack new subdomains with DNS ouput
-    else:
-        return posting_to_slack(None, False, None) #Nothing found notification
 
 def at_channel(): #control slack @channel
     return("<!channel> " if at_channel_enabled else "")
