@@ -151,15 +151,15 @@ class cert_database(object):  # Connecting to crt.sh public API to retrieve subd
             user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:64.0) Gecko/20100101 Firefox/64.0'
             try:
                 req = requests.get(url, headers={'User-Agent': user_agent}, timeout=30,
-                               verify=False)  # times out after 30 seconds waiting (Mainly for large datasets)
+                                   verify=False)  # times out after 30 seconds waiting (Mainly for large datasets)
+                if req.status_code == 200:
+                    content = req.content.decode('utf-8')
+                    data = json.loads(content)
+                    for subdomain in data:
+                        subdomains.add(subdomain["name_value"].lower())
+                    return sorted(subdomains)
             except (TimeoutError, ReadTimeout):
                 print('Request to https://crt.sh timed out.')
-            if req.status_code == 200:
-                content = req.content.decode('utf-8')
-                data = json.loads(content)
-                for subdomain in data:
-                    subdomains.add(subdomain["name_value"].lower())
-                return sorted(subdomains)
 
 
 def queuing():  # using the queue for multithreading purposes
@@ -278,37 +278,29 @@ def compare_files_diff(
 
 
 def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved subdomains
-    dns_results = {}
+    dns_results = set()
     subdomains_to_resolve = new_subdomains
     print(colored("\n[!] Performing DNS resolution. Please do not interrupt!", "red"))
     for domain in subdomains_to_resolve:
         domain = domain \
             .replace('+ ', '') \
             .replace('*.', '')
-        dns_results[domain] = {}
         try:
-            for qtype in ['A', 'CNAME']:
-                dns_output = dns.resolver.query(domain, qtype, raise_on_no_answer=False)
-                if dns_output.rrset is None:
-                    pass
-                elif dns_output.rdtype == 1:
-                    a_records = [str(i) for i in dns_output.rrset]
-                    dns_results[domain]["A"] = a_records
-                elif dns_output.rdtype == 5:
-                    cname_records = [str(i) for i in dns_output.rrset]
-                    dns_results[domain]["CNAME"] = cname_records
-                else:
-                    pass
+            # CNAME records decompose to A records as the stub resolver will detect that we hit a CNAME
+            QTYPE = 'A'
+            dns_output = dns.resolver.resolve(domain, QTYPE, raise_on_no_answer=False)
+            if dns_output.rrset is None:
+                pass
+            elif dns_output.rdtype == 1:
+                dns_results.add(domain)
+            else:
+                pass
         except dns.resolver.NXDOMAIN:
-            pass
+            print(f'{domain} does not exist.')
         except dns.resolver.Timeout:
-            dns_results[domain]["A"] = eval('["Timed out while resolving."]')
-            dns_results[domain]["CNAME"] = eval('["Timed out error while resolving."]')
-            pass
+            print('Timed out while resolving.')
         except dns.exception.DNSException:
-            dns_results[domain]["A"] = eval('["There was an error while resolving."]')
-            dns_results[domain]["CNAME"] = eval('["There was an error while resolving."]')
-            pass
+            print('There was an error while resolving.')
     if dns_results:
         return posting_to_slack(None, True, dns_results)  # Slack new subdomains with DNS ouput
 
