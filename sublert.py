@@ -14,6 +14,7 @@ import threading
 import dns.resolver
 import psycopg2
 import requests
+from requests import ReadTimeout
 from termcolor import colored
 from tld import get_fld
 from tld.exceptions import TldBadUrl, TldDomainNotFound
@@ -49,10 +50,6 @@ def parse_args():
                         dest="target",
                         help="Domain to monitor. E.g: yahoo.com",
                         required=False)
-    parser.add_argument("-q", "--question",
-                        type=string_to_bool, nargs='?',
-                        const=True, default=True,
-                        help="Disable user input questions")
     parser.add_argument('-t', '--threads',
                         dest="threads",
                         help="Number of concurrent threads to use. Default: 10",
@@ -68,17 +65,6 @@ def parse_args():
                         dest="logging",
                         help="Enable Slack-based error logging.",
                         required=False,
-                        nargs='?',
-                        const="True")
-    parser.add_argument('-a', '--list',
-                        dest="listing",
-                        help="Listing all monitored domains.",
-                        required=False,
-                        nargs='?',
-                        const="True")
-    parser.add_argument('-m', '--reset',
-                        dest="reset",
-                        help="Reset everything.",
                         nargs='?',
                         const="True")
     return parser.parse_args()
@@ -105,7 +91,7 @@ def slack(data):  # posting to Slack
     if not response.ok:
         error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
                                                                                      response.text)
-        errorlog(error, enable_logging)
+        error_log(error, enable_logging)
     if slack_sleep_enabled:
         time.sleep(1)
 
@@ -115,44 +101,7 @@ def send_healthcheck_to_slack():
     slack(HEALTHCHECK_MESSAGE)
 
 
-def reset(do_reset):  # clear the monitored list of domains and remove all locally stored files
-    if do_reset:
-        os.system("cd ./output/ && rm -f *.txt && cd .. && rm -f domains.txt && touch domains.txt")
-        print(colored("\n[!] Sublert was reset successfully. Please add new domains to monitor!", "red"))
-        sys.exit(1)
-    else:
-        pass
-
-
-def remove_domain(domain_to_delete):  # remove a domain from the monitored list
-    new_list = []
-    if domain_to_delete:
-        with open("domains.txt", "r") as domains:
-            for line in domains:
-                line = line.replace("\n", "")
-                if line in domain_to_delete:
-                    os.system("rm -f ./output/{}.txt".format(line))
-                    print(colored("\n[-] {} was successfully removed from the monitored list.".format(line), "green"))
-                else:
-                    new_list.append(line)
-        os.system("rm -f domains.txt")
-        with open("domains.txt", "w") as new_file:
-            for i in new_list:
-                new_file.write(i + "\n")
-        sys.exit(1)
-
-
-def domains_listing():  # list all the monitored domains
-    global list_domains
-    if list_domains:
-        print(colored("\n[*] Below is the list of monitored domain names:\n", "green"))
-        with open("domains.txt", "r") as monitored_list:
-            for domain in monitored_list:
-                print(colored("{}".format(domain.replace("\n", "")), "yellow"))
-        sys.exit(1)
-
-
-def errorlog(error, enable_logging):  # log errors and post them to slack channel
+def error_log(error, enable_logging):  # log errors and post them to slack channel
     if enable_logging:
         print(colored("\n[!] We encountered a small issue, please check error logging slack channel.", "red"))
         webhook_url = errorlogging_webhook
@@ -165,7 +114,7 @@ def errorlog(error, enable_logging):  # log errors and post them to slack channe
         if response.status_code != 200:
             error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
                                                                                          response.text)
-            errorlog(error, enable_logging)
+            error_log(error, enable_logging)
     else:
         pass
 
@@ -200,8 +149,11 @@ class cert_database(object):  # Connecting to crt.sh public API to retrieve subd
                 url = base_url.format(domain)
             subdomains = set()
             user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:64.0) Gecko/20100101 Firefox/64.0'
-            req = requests.get(url, headers={'User-Agent': user_agent}, timeout=30,
+            try:
+                req = requests.get(url, headers={'User-Agent': user_agent}, timeout=30,
                                verify=False)  # times out after 30 seconds waiting (Mainly for large datasets)
+            except (TimeoutError, ReadTimeout):
+                print('Request to https://crt.sh timed out.')
             if req.status_code == 200:
                 content = req.content.decode('utf-8')
                 data = json.loads(content)
@@ -256,20 +208,6 @@ def adding_new_domain(q1):  # adds a new domain to the monitoring list
                     domains.write(domain_to_monitor.lower() + '\n')
                     print(colored("\n[+] Adding {} to the monitored list of domains.\n".format(domain_to_monitor),
                                   "yellow"))
-                try:
-                    input = raw_input  # fixes python 2.x and 3.x input keyword
-                except NameError:
-                    pass
-                if not question: sys.exit(1)
-                choice = input(colored(
-                    "[?] Do you wish to list subdomains found for {}? [Y]es [N]o (default: [N]) ".format(
-                        domain_to_monitor), "yellow"))  # listing subdomains upon request
-                if choice.upper() == "Y":
-                    for subdomain in response:
-                        unique_list.append(subdomain)
-                    unique_list = list(set(unique_list))
-                    for subdomain in unique_list:
-                        print(colored(subdomain, "yellow"))
             else:
                 print(colored(
                     "\n[!] Added but unfortunately, we couldn't find any subdomain for {}".format(domain_to_monitor),
@@ -334,7 +272,7 @@ def compare_files_diff(
                 except:
                     error = "There was an error opening one of the files: {} or {}".format(
                         domain_to_monitor + '.txt', domain_to_monitor + '_tmp.txt')
-                    errorlog(error, enable_logging)
+                    error_log(error, enable_logging)
                     os.system("rm -f ./output/{}".format(line.replace('\n', '') + "_tmp.txt"))
             return (result)
 
@@ -483,17 +421,12 @@ if __name__ == '__main__':
     # parse arguments
     dns_resolve = parse_args().resolve
     enable_logging = parse_args().logging
-    list_domains = parse_args().listing
     domain_to_monitor = None
     if parse_args().target:
         domain_to_monitor = domain_sanity_check(parse_args().target)
-    question = parse_args().question
-    do_reset = parse_args().reset
 
     # execute the various functions
     banner()
-    reset(do_reset)
-    domains_listing()
     queuing()
     multithreading(parse_args().threads)
     new_subdomains = compare_files_diff(domain_to_monitor)
