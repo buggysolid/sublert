@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import sys
 from setuptools import setup
 
 VERSION = '1.0.0'
@@ -19,9 +18,9 @@ setup(
                       'dnspython',
                       'tld',
                       'termcolor',
-                     ],
+                      ],
     project_urls={
         'Documentation': 'http://github.com/yassineaboukir/sublert',
         'Roadmap': 'https://github.com/yassineaboukir/sublert/projects',
         'Issue Tracker': 'https://github.com/yassineaboukir/sublert/issues'}
-    )
+)
