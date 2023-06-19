@@ -16,6 +16,7 @@ import psycopg2
 import requests
 from termcolor import colored
 from tld import get_fld
+from tld.exceptions import TldBadUrl, TldDomainNotFound
 
 is_py2 = sys.version[
              0] == "2"  # checks if python version used == 2 in order to properly handle import of Queue module depending on the version used.
@@ -88,17 +89,14 @@ def parse_args():
 
 
 def domain_sanity_check(domain):  # Verify the domain name sanity
-    if domain:
-        try:
-            domain = get_fld(domain, fix_protocol=True)
-            return domain
-        except:
-            print(colored(
-                "[!] Incorrect domain format. Please follow this format: example.com, http(s)://example.com, www.example.com",
-                "red"))
-            sys.exit(1)
-    else:
-        pass
+    try:
+        domain = get_fld(domain, fix_protocol=True)
+        return domain
+    except (TldBadUrl, TldDomainNotFound):
+        print(colored(
+            "[!] Incorrect domain format. Please follow this format: example.com, http(s)://example.com, www.example.com",
+            "red"))
+        sys.exit(1)
 
 
 def slack(data):  # posting to Slack
@@ -109,7 +107,7 @@ def slack(data):  # posting to Slack
         data=json.dumps(slack_data),
         headers={'Content-Type': 'application/json'}
     )
-    if response.status_code != 200:
+    if not response.ok:
         error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
                                                                                      response.text)
         errorlog(error, enable_logging)
