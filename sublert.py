@@ -53,10 +53,6 @@ def parse_args():
                         type=string_to_bool, nargs='?',
                         const=True, default=True,
                         help="Disable user input questions")
-    parser.add_argument('-d', '--delete',
-                        dest="remove_domain",
-                        help="Domain to remove from the monitored list. E.g: yahoo.com",
-                        required=False)
     parser.add_argument('-t', '--threads',
                         dest="threads",
                         help="Number of concurrent threads to use. Default: 10",
@@ -90,13 +86,12 @@ def parse_args():
 
 def domain_sanity_check(domain):  # Verify the domain name sanity
     try:
-        domain = get_fld(domain, fix_protocol=True)
-        return domain
+        domain_ = get_fld(domain, fix_protocol=True)
+        return domain_
     except (TldBadUrl, TldDomainNotFound):
         print(colored(
             "[!] Incorrect domain format. Please follow this format: example.com, http(s)://example.com, www.example.com",
             "red"))
-        sys.exit(1)
 
 
 def slack(data):  # posting to Slack
@@ -300,19 +295,17 @@ def adding_new_domain(q1):  # adds a new domain to the monitoring list
 def check_new_subdomains(
         q2):  # retrieves new list of subdomains and stores a temporary text file for comparaison purposes
     global domain_to_monitor
-    global domain_to_delete
     if domain_to_monitor is None:
-        if domain_to_delete is None:
-            try:
-                line = q2.get(timeout=10)
-                print("[*] Checking {}".format(line))
-                with open("./output/" + line.lower() + "_tmp.txt", "a") as subs:
-                    response = cert_database().lookup(line)
-                    if response:
-                        for subdomain in response:
-                            subs.write(subdomain + "\n")
-            except queue.Empty:
-                pass
+        try:
+            line = q2.get(timeout=10)
+            print("[*] Checking {}".format(line))
+            with open("./output/" + line.lower() + "_tmp.txt", "a") as subs:
+                response = cert_database().lookup(line)
+                if response:
+                    for subdomain in response:
+                        subs.write(subdomain + "\n")
+        except queue.Empty:
+            pass
     else:
         pass
 
@@ -321,30 +314,29 @@ def compare_files_diff(
         domain_to_monitor):  # compares the temporary text file with previously stored copy to check if there are new subdomains
     global enable_logging
     if domain_to_monitor is None:
-        if domain_to_delete is None:
-            result = []
-            with open("domains.txt", "r") as targets:
-                for line in targets:
-                    domain_to_monitor = line.replace('\n', '')
-                    try:
-                        file1 = open("./output/" + domain_to_monitor.lower() + '.txt', 'r')
-                        file2 = open("./output/" + domain_to_monitor.lower() + '_tmp.txt', 'r')
-                        diff = difflib.ndiff(file1.readlines(), file2.readlines())
-                        changes = [l for l in diff if l.startswith('+ ')]  # check if there are new items/subdomains
-                        newdiff = []
-                        for c in changes:
-                            c = c \
-                                .replace('+ ', '') \
-                                .replace('*.', '') \
-                                .replace('\n', '')
-                            result.append(c)
-                            result = list(set(result))  # remove duplicates
-                    except:
-                        error = "There was an error opening one of the files: {} or {}".format(
-                            domain_to_monitor + '.txt', domain_to_monitor + '_tmp.txt')
-                        errorlog(error, enable_logging)
-                        os.system("rm -f ./output/{}".format(line.replace('\n', '') + "_tmp.txt"))
-                return (result)
+        result = []
+        with open("domains.txt", "r") as targets:
+            for line in targets:
+                domain_to_monitor = line.replace('\n', '')
+                try:
+                    file1 = open("./output/" + domain_to_monitor.lower() + '.txt', 'r')
+                    file2 = open("./output/" + domain_to_monitor.lower() + '_tmp.txt', 'r')
+                    diff = difflib.ndiff(file1.readlines(), file2.readlines())
+                    changes = [l for l in diff if l.startswith('+ ')]  # check if there are new items/subdomains
+                    newdiff = []
+                    for c in changes:
+                        c = c \
+                            .replace('+ ', '') \
+                            .replace('*.', '') \
+                            .replace('\n', '')
+                        result.append(c)
+                        result = list(set(result))  # remove duplicates
+                except:
+                    error = "There was an error opening one of the files: {} or {}".format(
+                        domain_to_monitor + '.txt', domain_to_monitor + '_tmp.txt')
+                    errorlog(error, enable_logging)
+                    os.system("rm -f ./output/{}".format(line.replace('\n', '') + "_tmp.txt"))
+            return (result)
 
 
 def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved subdomains
@@ -492,15 +484,15 @@ if __name__ == '__main__':
     dns_resolve = parse_args().resolve
     enable_logging = parse_args().logging
     list_domains = parse_args().listing
-    domain_to_monitor = domain_sanity_check(parse_args().target)
+    domain_to_monitor = None
+    if parse_args().target:
+        domain_to_monitor = domain_sanity_check(parse_args().target)
     question = parse_args().question
-    domain_to_delete = domain_sanity_check(parse_args().remove_domain)
     do_reset = parse_args().reset
 
     # execute the various functions
     banner()
     reset(do_reset)
-    remove_domain(domain_to_delete)
     domains_listing()
     queuing()
     multithreading(parse_args().threads)
