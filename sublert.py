@@ -313,9 +313,8 @@ def posting_to_slack(result, dns_resolve, dns_output):  # sending result to slac
     global domain_to_monitor
     global new_subdomains
     if dns_resolve:
-        dns_result = dns_output
+        dns_result = list(dns_output)
         if dns_result:
-            dns_result = {k: v for k, v in dns_result.items() if v}  # filters non-resolving subdomains
             rev_url = []
             print(colored("\n[!] Exporting result to Slack. Please do not interrupt!", "red"))
             for url in dns_result:
@@ -324,26 +323,12 @@ def posting_to_slack(result, dns_resolve, dns_output):  # sending result to slac
                     .replace('+ ', '')
                 rev_url.append(get_fld(url, fix_protocol=True))
 
-            unique_list = list(set(new_subdomains) & set(
-                dns_result.keys()))  # filters non-resolving subdomains from new_subdomains list
+            unique_list = list(
+                set(new_subdomains) & set(dns_result))  # filters non-resolving subdomains from new_subdomains list
 
             for subdomain in unique_list:
                 data = "{}:new: {}".format(at_channel(), subdomain)
                 slack(data)
-                try:
-                    if dns_result[subdomain]["A"]:
-                        for i in dns_result[subdomain]["A"]:
-                            data = "```A : {}```".format(i)
-                            slack(data)
-                except:
-                    pass
-                try:
-                    if dns_result[subdomain]['CNAME']:
-                        for i in dns_result[subdomain]['CNAME']:
-                            data = "```CNAME : {}```".format(i)
-                            slack(data)
-                except:
-                    pass
             print(colored("\n[!] Done. ", "green"))
             rev_url = list(set(rev_url))
             for url in rev_url:
