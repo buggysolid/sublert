@@ -149,17 +149,27 @@ class cert_database(object):  # Connecting to crt.sh public API to retrieve subd
                 url = base_url.format(domain)
             subdomains = set()
             user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:64.0) Gecko/20100101 Firefox/64.0'
-            try:
-                req = requests.get(url, headers={'User-Agent': user_agent}, timeout=30,
-                                   verify=False)  # times out after 30 seconds waiting (Mainly for large datasets)
-                if req.status_code == 200:
-                    content = req.content.decode('utf-8')
-                    data = json.loads(content)
-                    for subdomain in data:
-                        subdomains.add(subdomain["name_value"].lower())
-                    return sorted(subdomains)
-            except (TimeoutError, ReadTimeout):
-                print('Request to https://crt.sh timed out.')
+            retries = 3
+            timeout = 30
+            backoff = 2
+            success = False
+            while retries != 0 and success is not True:
+                print(timeout)
+                try:
+                    req = requests.get(url, headers={'User-Agent': user_agent}, timeout=timeout,
+                                       verify=False)
+                    if req.status_code == 200:
+                        success = True
+                        content = req.content.decode('utf-8')
+                        data = json.loads(content)
+                        for subdomain in data:
+                            subdomains.add(subdomain["name_value"].lower())
+                        return sorted(subdomains)
+                except (TimeoutError, ReadTimeout):
+                    success = False
+                    retries -= 1
+                    timeout *= backoff
+                    print('Request to https://crt.sh timed out.')
 
 
 def queuing():  # using the queue for multithreading purposes
