@@ -4,16 +4,21 @@
 # Huge shout out to the Indian bug bounty community for their hospitality.
 
 import argparse
+import asyncio
 import difflib
 import json
 import os
+import random
 import re
 import sys
 import threading
 
-import dns.resolver
+import aiohttp
 import psycopg2
 import requests
+from aiohttp import InvalidURL, ServerDisconnectedError, ClientConnectorError
+from dns import asyncresolver
+from dns.resolver import NXDOMAIN, NoAnswer
 from requests import ReadTimeout
 from termcolor import colored
 from tld import get_fld
@@ -154,7 +159,6 @@ class cert_database(object):  # Connecting to crt.sh public API to retrieve subd
             backoff = 2
             success = False
             while retries != 0 and success is not True:
-                print(timeout)
                 try:
                     req = requests.get(url, headers={'User-Agent': user_agent}, timeout=timeout,
                                        verify=False)
@@ -287,7 +291,63 @@ def compare_files_diff(
             return (result)
 
 
-def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved subdomains
+async def get_request(url):
+    timeout = aiohttp.ClientTimeout(total=5)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        try:
+            async with session.get(url, ssl=False) as response:
+                return url
+        except InvalidURL:
+            print(f'Malformed URL {url}')
+        except ClientConnectorError as client_error:
+            print(f'Can not connect to {url}')
+            print(client_error)
+        except ServerDisconnectedError:
+            print(f'Server disconnected when trying {url}')
+        except AssertionError:
+            print(f'Something went wrong when trying to resolve {url}')
+        except asyncio.exceptions.TimeoutError:
+            print(f'Timed out while waiting for response from {url}')
+        except aiohttp.client_exceptions.ClientOSError:
+            print(f'Connection reset by peer when requesting {url}')
+
+
+async def resolve_name_to_ip(url):
+    resolver = asyncresolver.Resolver()
+    try:
+        rdata = await resolver.resolve(url)
+        if rdata.rrset:
+            if len(rdata.rrset) > 1:
+                return random.choice(rdata.rrset.to_rdataset()).address
+            elif len(rdata.rrset) == 1:
+                return rdata.rrset.to_rdataset()[0].address
+    except NXDOMAIN:
+        print(f'{url} does not exist.')
+    except NoAnswer:
+        print(f'There was no answer from the remote nameservers for {url}')
+
+
+async def http_get_request(url):
+    ip = await resolve_name_to_ip(url)
+    if ip is None:
+        return
+    ip = 'http://' + ip
+    http_url = await get_request(ip)
+    if http_url:
+        return 'http://' + url
+
+
+async def https_get_request(url):
+    ip = await resolve_name_to_ip(url)
+    if ip is None:
+        return
+    ip = 'https://' + ip
+    http_url = await get_request(ip)
+    if http_url:
+        return 'https://' + url
+
+
+async def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved subdomains
     dns_results = set()
     subdomains_to_resolve = new_subdomains
     print(colored("\n[!] Performing DNS resolution. Please do not interrupt!", "red"))
@@ -295,22 +355,14 @@ def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved subdo
         domain = domain \
             .replace('+ ', '') \
             .replace('*.', '')
-        try:
-            # CNAME records decompose to A records as the stub resolver will detect that we hit a CNAME
-            QTYPE = 'A'
-            dns_output = dns.resolver.resolve(domain, QTYPE, raise_on_no_answer=False)
-            if dns_output.rrset is None:
-                pass
-            elif dns_output.rdtype == 1:
-                dns_results.add(domain)
-            else:
-                pass
-        except dns.resolver.NXDOMAIN:
-            print(f'{domain} does not exist.')
-        except dns.resolver.Timeout:
-            print('Timed out while resolving.')
-        except dns.exception.DNSException:
-            print('There was an error while resolving.')
+        http_url = await http_get_request(domain)
+        https_url = await https_get_request(domain)
+        if http_url is not None:
+            dns_results.add(http_url)
+        elif https_url is not None:
+            dns_results.add(https_url)
+        print(dns_results)
+
     if dns_results:
         return posting_to_slack(None, True, dns_results)  # Slack new subdomains with DNS ouput
 
@@ -325,6 +377,10 @@ def posting_to_slack(result, dns_resolve, dns_output):  # sending result to slac
     if dns_resolve:
         dns_result = list(dns_output)
         if dns_result:
+            for subdomain in dns_result:
+                data = "{}:new: {}".format(at_channel(), subdomain)
+                slack(data)
+
             rev_url = []
             print(colored("\n[!] Exporting result to Slack. Please do not interrupt!", "red"))
             for url in dns_result:
@@ -333,12 +389,6 @@ def posting_to_slack(result, dns_resolve, dns_output):  # sending result to slac
                     .replace('+ ', '')
                 rev_url.append(get_fld(url, fix_protocol=True))
 
-            unique_list = list(
-                set(new_subdomains) & set(dns_result))  # filters non-resolving subdomains from new_subdomains list
-
-            for subdomain in unique_list:
-                data = "{}:new: {}".format(at_channel(), subdomain)
-                slack(data)
             print(colored("\n[!] Done. ", "green"))
             rev_url = list(set(rev_url))
             for url in rev_url:
@@ -420,8 +470,9 @@ if __name__ == '__main__':
 
     # Check if DNS resolution is checked
     if not domain_to_monitor:
-        if (dns_resolve and new_subdomains):
-            dns_resolution(new_subdomains)
+        if dns_resolve and new_subdomains:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(dns_resolution(new_subdomains))
         else:
             posting_to_slack(new_subdomains, False, None)
     else:
