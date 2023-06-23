@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-# coding: utf-8
-# Announced and released during OWASP Seasides 2019 & NullCon.
-# Huge shout out to the Indian bug bounty community for their hospitality.
 
 import argparse
 import asyncio
@@ -19,7 +16,7 @@ import psycopg2
 import requests
 from aiohttp import InvalidURL, ServerDisconnectedError, ClientConnectorError
 from dns import asyncresolver
-from dns.resolver import NXDOMAIN, NoAnswer
+from dns.resolver import NXDOMAIN, NoAnswer, LifetimeTimeout
 from requests import ReadTimeout
 from termcolor import colored
 from tld import get_fld
@@ -34,20 +31,8 @@ else:
 from config import *
 import time
 
-version = "1.4.8"
+version = "1.0.0"
 requests.packages.urllib3.disable_warnings()
-
-
-def banner():
-    print('''
-                   _____       __    __          __
-                  / ___/__  __/ /_  / /__  _____/ /_
-                  \__ \/ / / / __ \/ / _ \/ ___/ __/
-                 ___/ / /_/ / /_/ / /  __/ /  / /_
-                /____/\__,_/_.___/_/\___/_/   \__/
-    ''')
-    print(colored("             Author: Yassine Aboukir (@yassineaboukir)", "red"))
-    print(colored("                           Version: {}", "red").format(version))
 
 
 def parse_args():
@@ -326,6 +311,8 @@ async def resolve_name_to_ip(url):
         print(f'{url} does not exist.')
     except NoAnswer:
         print(f'There was no answer from the remote nameservers for {url}')
+    except LifetimeTimeout:
+        print(f'DNS query for {url} timed out.')
 
 
 async def http_get_request(url):
@@ -448,7 +435,6 @@ if __name__ == '__main__':
         domain_to_monitor = domain_sanity_check(parse_args().target)
 
     # execute the various functions
-    banner()
     queuing()
     multithreading(parse_args().threads)
     new_subdomains = compare_files_diff(domain_to_monitor)
