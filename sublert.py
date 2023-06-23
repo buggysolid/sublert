@@ -16,7 +16,7 @@ import psycopg2
 import requests
 from aiohttp import InvalidURL, ServerDisconnectedError, ClientConnectorError
 from dns import asyncresolver
-from dns.resolver import NXDOMAIN, NoAnswer, LifetimeTimeout
+from dns.resolver import NXDOMAIN, NoAnswer, LifetimeTimeout, NoNameservers, YXDOMAIN
 from requests import ReadTimeout
 from termcolor import colored
 from tld import get_fld
@@ -313,6 +313,10 @@ async def resolve_name_to_ip(url):
         print(f'There was no answer from the remote nameservers for {url}')
     except LifetimeTimeout:
         print(f'DNS query for {url} timed out.')
+    except NoNameservers:
+        print(f'DNS query for {url} SERVFAIL.')
+    except YXDOMAIN:
+        print(f'DNS query for {url} is too long.')
 
 
 async def http_get_request(url):
