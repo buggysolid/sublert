@@ -10,6 +10,7 @@ import json
 import os
 import random
 import re
+import sqlite3
 import sys
 import threading
 
@@ -371,55 +372,39 @@ def at_channel():  # control slack @channel
     return ("<!channel> " if at_channel_enabled else "")
 
 
+def check_and_insert_url(url):
+    db_path = 'output/urls.db'
+    with sqlite3.connect(db_path) as conn:
+        c = conn.cursor()
+
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS urls (
+                url TEXT PRIMARY KEY
+            );
+        ''')
+
+        c.execute('SELECT url FROM urls WHERE url = ?;', (url,))
+        result = c.fetchone()
+
+        if result is None:
+            print(f'New URL found. {url}')
+            slack(url)
+            c.execute('INSERT INTO urls (url) VALUES (?);', (url,))
+        else:
+            print(f'{url} already exists in the database.')
+
+        conn.commit()
+
+
 def posting_to_slack(result, dns_resolve, dns_output):  # sending result to slack workplace
     global domain_to_monitor
     global new_subdomains
     if dns_resolve:
-        dns_result = list(dns_output)
-        if dns_result:
-            for subdomain in dns_result:
-                data = "{}:new: {}".format(at_channel(), subdomain)
-                slack(data)
-
-            rev_url = []
-            print(colored("\n[!] Exporting result to Slack. Please do not interrupt!", "red"))
-            for url in dns_result:
-                url = url \
-                    .replace('*.', '') \
-                    .replace('+ ', '')
-                rev_url.append(get_fld(url, fix_protocol=True))
-
-            print(colored("\n[!] Done. ", "green"))
-            rev_url = list(set(rev_url))
-            for url in rev_url:
-                os.system("rm -f ./output/" + url.lower() + ".txt")
-                os.system(
-                    "mv -f ./output/" + url.lower() + "_tmp.txt " + "./output/" + url.lower() + ".txt")  # save the temporary one
-            os.system("rm -f ./output/*_tmp.txt")  # remove the remaining tmp files
-
+        for domain in dns_output:
+            check_and_insert_url(domain)
     elif result:
-        rev_url = []
-        print(colored("\n[!] Exporting the result to Slack. Please don't interrupt!", "red"))
-        for url in result:
-            url = "https://" + url.replace('+ ', '')
-            rev_url.append(get_fld(url))
-            data = "{}:new: {}".format(at_channel(), url)
-            slack(data)
-        print(colored("\n[!] Done. ", "green"))
-        rev_url = list(set(rev_url))
-
-        for url in rev_url:
-            os.system("rm -f ./output/" + url.lower() + ".txt")
-            os.system(
-                "mv -f ./output/" + url.lower() + "_tmp.txt " + "./output/" + url.lower() + ".txt")  # save the temporary one
-        os.system("rm -f ./output/*_tmp.txt")  # remove the remaining tmp files
-
-    else:
-        if not domain_to_monitor:
-            print(colored("\n[!] Done. ", "green"))
-            os.system("rm -f ./output/*_tmp.txt")
-        else:
-            pass
+        for domain in result:
+            check_and_insert_url(domain)
 
 
 def multithreading(threads):
