@@ -282,7 +282,10 @@ async def get_request(url):
     async with aiohttp.ClientSession(timeout=timeout) as session:
         try:
             async with session.get(url, ssl=False) as response:
-                return url
+                if response.content_length is None:
+                    # The database will not be happy if we try to store Nones a integers.
+                    return [response.status, 0, response.content_type, url]
+                return [response.status, response.content_length, response.content_type, url]
         except InvalidURL:
             print(f'Malformed URL {url}')
         except ClientConnectorError as client_error:
@@ -324,9 +327,9 @@ async def http_get_request(url):
     if ip is None:
         return
     ip = 'http://' + ip
-    http_url = await get_request(ip)
-    if http_url:
-        return 'http://' + url
+    http_response = await get_request(ip)
+    if http_response:
+        http_response.append('http://' + url)
 
 
 async def https_get_request(url):
@@ -334,13 +337,14 @@ async def https_get_request(url):
     if ip is None:
         return
     ip = 'https://' + ip
-    http_url = await get_request(ip)
-    if http_url:
-        return 'https://' + url
+    https_response = await get_request(ip)
+    if https_response:
+        https_response.append('https://' + url)
+        return https_response
 
 
 async def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved subdomains
-    dns_results = set()
+    dns_results = list()
     subdomains_to_resolve = new_subdomains
     print(colored("\n[!] Performing DNS resolution. Please do not interrupt!", "red"))
     for domain in subdomains_to_resolve:
@@ -350,9 +354,9 @@ async def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved
         http_url = await http_get_request(domain)
         https_url = await https_get_request(domain)
         if http_url is not None:
-            dns_results.add(http_url)
+            dns_results.append(http_url)
         elif https_url is not None:
-            dns_results.add(https_url)
+            dns_results.append(https_url)
         print(dns_results)
 
     if dns_results:
@@ -363,39 +367,49 @@ def at_channel():  # control slack @channel
     return ("<!channel> " if at_channel_enabled else "")
 
 
-def check_and_insert_url(url):
+def check_and_insert_url(http_responses):
     db_path = 'output/urls.db'
     with sqlite3.connect(db_path) as conn:
         c = conn.cursor()
 
         c.execute('''
             CREATE TABLE IF NOT EXISTS urls (
-                url TEXT PRIMARY KEY
-            );
+                status_code INTEGER,
+                content_length INTEGER,
+                content_type TEXT,
+                ip_url TEXT,
+                dns_url TEXT PRIMARY KEY
+            )
         ''')
 
-        c.execute('SELECT url FROM urls WHERE url = ?;', (url,))
-        result = c.fetchone()
+        http_responses.sort()
 
-        if result is None:
-            print(f'New URL found. {url}')
-            slack(url)
-            c.execute('INSERT INTO urls (url) VALUES (?);', (url,))
-        else:
-            print(f'{url} already exists in the database.')
+        for http_response in http_responses:
+            status_code, content_length, content_type, ip_url, dns_url = http_response
+            c.execute('SELECT dns_url FROM urls WHERE dns_url = ?;', (dns_url,))
+            result = c.fetchone()
 
-        conn.commit()
+            if result is None:
+                print(f'New URL found. {dns_url}')
+                http_response_formatted_for_slack = f'{status_code},{content_length},{content_type},{ip_url},{dns_url}'
+                slack(http_response_formatted_for_slack)
+                c.execute('''
+                            INSERT INTO urls (status_code, content_length, content_type, ip_url, dns_url) 
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', http_response)
+            else:
+                print(f'{dns_url} already exists in the database.')
+
+            conn.commit()
 
 
 def posting_to_slack(result, dns_resolve, dns_output):  # sending result to slack workplace
     global domain_to_monitor
     global new_subdomains
     if dns_resolve:
-        for domain in dns_output:
-            check_and_insert_url(domain)
+        check_and_insert_url(dns_output)
     elif result:
-        for domain in result:
-            check_and_insert_url(domain)
+        check_and_insert_url(result)
 
 
 def multithreading(threads):
