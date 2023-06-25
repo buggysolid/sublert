@@ -5,11 +5,14 @@ import asyncio
 import difflib
 import json
 import os
+import queue as queue
 import random
 import re
 import sqlite3
 import sys
 import threading
+import time
+import pathlib
 
 import aiohttp
 import psycopg2
@@ -22,42 +25,36 @@ from termcolor import colored
 from tld import get_fld
 from tld.exceptions import TldBadUrl, TldDomainNotFound
 
-is_py2 = sys.version[
-             0] == "2"  # checks if python version used == 2 in order to properly handle import of Queue module depending on the version used.
-if is_py2:
-    import Queue as queue
-else:
-    import queue as queue
 from config import *
-import time
 
-version = "1.0.0"
+version = "1.0.1"
 requests.packages.urllib3.disable_warnings()
+
+
+def cpu_core_count():
+    return os.cpu_count()
+
+
+class URLValidationAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        if domain_sanity_check(values):
+            setattr(namespace, self.dest, values)
+        else:
+            exit(-1)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-u', '--url',
                         dest="target",
+                        action=URLValidationAction,
                         help="Domain to monitor. E.g: yahoo.com",
                         required=False)
     parser.add_argument('-t', '--threads',
                         dest="threads",
                         help="Number of concurrent threads to use. Default: 10",
                         type=int,
-                        default=10)
-    parser.add_argument('-r', '--resolve',
-                        dest="resolve",
-                        help="Perform DNS resolution.",
-                        required=False,
-                        nargs='?',
-                        const="True")
-    parser.add_argument('-l', '--logging',
-                        dest="logging",
-                        help="Enable Slack-based error logging.",
-                        required=False,
-                        nargs='?',
-                        const="True")
+                        default=cpu_core_count())
     return parser.parse_args()
 
 
@@ -93,24 +90,22 @@ def send_healthcheck_to_slack():
 
 
 def error_log(error, enable_logging):  # log errors and post them to slack channel
-    if enable_logging:
-        print(colored("\n[!] We encountered a small issue, please check error logging slack channel.", "red"))
-        webhook_url = errorlogging_webhook
-        slack_data = {'text': '```' + error + '```'}
-        response = requests.post(
-            webhook_url,
-            data=json.dumps(slack_data),
-            headers={'Content-Type': 'application/json'}
-        )
-        if response.status_code != 200:
-            error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
-                                                                                         response.text)
-            error_log(error, enable_logging)
-    else:
-        pass
+    print(colored("\n[!] We encountered a small issue, please check error logging slack channel.", "red"))
+    webhook_url = errorlogging_webhook
+    slack_data = {'text': '```' + error + '```'}
+    response = requests.post(
+        webhook_url,
+        data=json.dumps(slack_data),
+        headers={'Content-Type': 'application/json'}
+    )
+    if response.status_code != 200:
+        error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
+                                                                                     response.text)
+        error_log(error, enable_logging)
 
 
 class cert_database(object):  # Connecting to crt.sh public API to retrieve subdomains
+    print('Attempting to gather information via crt.sh')
     global enable_logging
 
     def lookup(self, domain, wildcard=True):
@@ -170,7 +165,8 @@ def queuing():  # using the queue for multithreading purposes
     q2 = queue.Queue(maxsize=0)
     if domain_to_monitor:
         pass
-    elif os.path.getsize("domains.txt") == 0:
+    # Move this to a CLI check, there is no point in getting this far and then checking.
+    elif not pathlib.Path('domains.txt').exists():
         print(colored("[!] Please consider adding a list of domains to monitor first.", "red"))
         sys.exit(1)
     else:
@@ -205,7 +201,7 @@ def adding_new_domain(q1):  # adds a new domain to the monitoring list
                     for subdomain in response:
                         subdomains.write(subdomain + "\n")
                 with open("domains.txt", "a") as domains:  # fetching subdomains if not monitored
-                    domains.write(domain_to_monitor.lower() + '\n')
+                    domains.writelines(domain_to_monitor.lower())
                     print(colored("\n[+] Adding {} to the monitored list of domains.\n".format(domain_to_monitor),
                                   "yellow"))
             else:
@@ -330,6 +326,7 @@ async def http_get_request(url):
     http_response = await get_request(ip)
     if http_response:
         http_response.append('http://' + url)
+        return http_response
 
 
 async def https_get_request(url):
@@ -343,10 +340,10 @@ async def https_get_request(url):
         return https_response
 
 
-async def dns_resolution(new_subdomains):  # Perform DNS resolution on retrieved subdomains
+async def check_hostnames_over_http_and_https(new_subdomains):
     dns_results = list()
     subdomains_to_resolve = new_subdomains
-    print(colored("\n[!] Performing DNS resolution. Please do not interrupt!", "red"))
+    print(colored("\n[!] Performing HTTP and HTTPs GET requests. Please do not interrupt!", "red"))
     for domain in subdomains_to_resolve:
         domain = domain \
             .replace('+ ', '') \
@@ -432,37 +429,16 @@ def multithreading(threads):
         t.join()
 
 
-def string_to_bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-
 if __name__ == '__main__':
 
-    # parse arguments
-    dns_resolve = parse_args().resolve
-    enable_logging = parse_args().logging
-    domain_to_monitor = None
-    if parse_args().target:
-        domain_to_monitor = domain_sanity_check(parse_args().target)
+    domain_to_monitor = parse_args().target
 
-    # execute the various functions
     queuing()
     multithreading(parse_args().threads)
     new_subdomains = compare_files_diff(domain_to_monitor)
 
-    # Check if DNS resolution is checked
-    if not domain_to_monitor:
-        if dns_resolve and new_subdomains:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(dns_resolution(new_subdomains))
-        else:
-            posting_to_slack(new_subdomains, False, None)
+    if not domain_to_monitor and new_subdomains:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(check_hostnames_over_http_and_https(new_subdomains))
     else:
-        pass
+        posting_to_slack(new_subdomains, False, None)

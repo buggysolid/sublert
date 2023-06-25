@@ -3,15 +3,17 @@ Sublert-http is a maintained fork of [sublert](https://github.com/yassineaboukir
 
 ## Requirements
 - Virtual Private Server (VPS) running on Unix. 
-- Python 2.x or 3.x.
+- Python 3.
 - Free Slack workspace.
-
-## Installation & Configuration
-Please refer to below article for a detailed technical explanation:
-- https://medium.com/@yassineaboukir/automated-monitoring-of-subdomains-for-fun-and-profit-release-of-sublert-634cfc5d7708
 
 ## Usage
 
+1. git clone https://github.com/buggysolid/sublert-http
+1. cd sublert-http
 1. python3 -m venv runtime && source runtime/bin/activate && pip install -r requirements.txt
-2. Add hostnames to domains.txt in the output/ directory.
-3. Run the script with python3 sublert.py -r 1.1.1.1
+1. python3 sublert.py -u tiktokv.com
+1. Edit config.py to include your slack incoming webhook. https://api.slack.com/messaging/webhooks
+1. python3 sublert.py
+1. python3 sublert.py
+
+**You have to run it twice because the first pass pulls initial domains and stores them. Then on the next run they will be detected as "new"**
