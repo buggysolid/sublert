@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import pathlib
+from operator import itemgetter
 
 import aiohttp
 import psycopg2
@@ -201,7 +202,8 @@ def adding_new_domain(q1):  # adds a new domain to the monitoring list
                     for subdomain in response:
                         subdomains.write(subdomain + "\n")
                 with open("domains.txt", "a") as domains:  # fetching subdomains if not monitored
-                    domains.writelines(domain_to_monitor.lower())
+                    domain_to_monitor_ = f'{domain_to_monitor.lower()}\n'
+                    domains.write(domain_to_monitor_)
                     print(colored("\n[+] Adding {} to the monitored list of domains.\n".format(domain_to_monitor),
                                   "yellow"))
             else:
@@ -379,7 +381,22 @@ def check_and_insert_url(http_responses):
             )
         ''')
 
-        http_responses.sort()
+        '''
+        Sort by several fields.
+        
+        I want a list of URLs sorted by status code, content-length, mime type and then the url itself.
+        
+        The goal being to have URLs with 403 Forbidden, application/json and the letter 'a' as in api.x.com bubble to the top
+        of the results.
+        '''
+        # status_code
+        http_responses.sort(key=itemgetter(0), reverse=True)
+        # content_length
+        http_responses.sort(key=itemgetter(1), reverse=True)
+        # content_type
+        http_responses.sort(key=itemgetter(2))
+        # URL with hostname
+        http_responses.sort(key=itemgetter(4))
 
         for http_response in http_responses:
             status_code, content_length, content_type, ip_url, dns_url = http_response
