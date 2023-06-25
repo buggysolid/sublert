@@ -386,17 +386,37 @@ def check_and_insert_url(http_responses):
         
         I want a list of URLs sorted by status code, content-length, mime type and then the url itself.
         
-        The goal being to have URLs with 403 Forbidden, application/json and the letter 'a' as in api.x.com bubble to the top
-        of the results.
+        The goal being to have URLs with 403 Forbidden, application/json and the letter 'a' as in api.x.com to be shown most 
+        recently in the slack channel.
         '''
         # status_code
         http_responses.sort(key=itemgetter(0), reverse=True)
+
+        def custom_url_sort(item_):
+            # the hostname based url
+            item = item_[4]
+            # compare the fqdn and not the URI
+            return item.split('://')[-1]
+
+        # URL with hostname
+        http_responses.sort(key=custom_url_sort)
+
+        '''
+        May need to add a another edge case for this sort to handle
+        things like application/octet-stream
+        
+        maybe consider sorting content type header by the first letter after the split?
+        '''
+        def custom_content_type_sort(item_):
+            # the content type header
+            item = item_[2]
+            # consider the right most half of the content-type header
+            # .e.g. application/json will be 'json'
+            return item.split('/')[-1]
+        # content_type
+        http_responses.sort(key=custom_content_type_sort)
         # content_length
         http_responses.sort(key=itemgetter(1), reverse=True)
-        # content_type
-        http_responses.sort(key=itemgetter(2))
-        # URL with hostname
-        http_responses.sort(key=itemgetter(4))
 
         for http_response in http_responses:
             status_code, content_length, content_type, ip_url, dns_url = http_response
