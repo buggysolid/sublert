@@ -5,6 +5,7 @@ import asyncio
 import difflib
 import json
 import os
+import pathlib
 import queue as queue
 import random
 import re
@@ -12,7 +13,6 @@ import sqlite3
 import sys
 import threading
 import time
-import pathlib
 from operator import itemgetter
 
 import aiohttp
@@ -297,6 +297,8 @@ async def get_request(url):
             print(f'Timed out while waiting for response from {url}')
         except aiohttp.client_exceptions.ClientOSError:
             print(f'Connection reset by peer when requesting {url}')
+        except aiohttp.client_exceptions.TooManyRedirects:
+            print(f'Request for {url} resulting in too many redirects.')
 
 
 async def resolve_name_to_ip(url):
@@ -407,12 +409,14 @@ def check_and_insert_url(http_responses):
         
         maybe consider sorting content type header by the first letter after the split?
         '''
+
         def custom_content_type_sort(item_):
             # the content type header
             item = item_[2]
             # consider the right most half of the content-type header
             # .e.g. application/json will be 'json'
             return item.split('/')[-1]
+
         # content_type
         http_responses.sort(key=custom_content_type_sort)
         # content_length
