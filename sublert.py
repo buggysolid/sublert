@@ -275,30 +275,52 @@ def compare_files_diff(
             return (result)
 
 
-async def get_request(url):
+async def get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, hostname):
     timeout = aiohttp.ClientTimeout(total=5)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    headers = {
+        'Host': hostname,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+        'Referer': 'https://www.google.com/'
+    }
+    # If these regular expression expand any further switch to using lxml or bs4 to actually parse HTML correctly.
+    title_regex_pattern = re.compile(r'\<title\>(.*?)\<\/title\>')
+    page_title = ''
+    form_pattern = re.compile(r"<form[\s\S]*?</form>")
+    # SQLite DB has no native boolean type so I am just using 0 and 1.
+    has_form = 0
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
         try:
-            async with session.get(url, ssl=False) as response:
+            async with session.get(url_with_scheme_using_ip, ssl=False) as response:
                 if response.content_length is None:
-                    # The database will not be happy if we try to store Nones a integers.
-                    return [response.status, 0, response.content_type, url]
-                return [response.status, response.content_length, response.content_type, url]
+                    # The database will not be happy if we try to store Nones as an integer.
+                    return [response.status, 0, response.content_type, url_with_scheme_using_ip, has_form, page_title,
+                            url_with_scheme_using_hostname]
+                page_body = await response.content.read()
+                page_body_decoded = page_body.decode('UTF-8')
+                title_match = title_regex_pattern.search(page_body_decoded)
+                if title_match:
+                    page_title = title_match.group(1)
+                form_match = form_pattern.search(page_body_decoded)
+                if form_match:
+                    has_form = 1
+                return [response.status, response.content_length, response.content_type, url_with_scheme_using_ip,
+                        has_form, page_title,
+                        url_with_scheme_using_hostname]
         except InvalidURL:
-            print(f'Malformed URL {url}')
+            print(f'Malformed URL {url_with_scheme_using_ip}')
         except ClientConnectorError as client_error:
-            print(f'Can not connect to {url}')
+            print(f'Can not connect to {url_with_scheme_using_ip}')
             print(client_error)
         except ServerDisconnectedError:
-            print(f'Server disconnected when trying {url}')
+            print(f'Server disconnected when trying {url_with_scheme_using_ip}')
         except AssertionError:
-            print(f'Something went wrong when trying to resolve {url}')
+            print(f'Something went wrong when trying to resolve {url_with_scheme_using_ip}')
         except asyncio.exceptions.TimeoutError:
-            print(f'Timed out while waiting for response from {url}')
+            print(f'Timed out while waiting for response from {url_with_scheme_using_ip}')
         except aiohttp.client_exceptions.ClientOSError:
-            print(f'Connection reset by peer when requesting {url}')
+            print(f'Connection reset by peer when requesting {url_with_scheme_using_ip}')
         except aiohttp.client_exceptions.TooManyRedirects:
-            print(f'Request for {url} resulting in too many redirects.')
+            print(f'Request for {url_with_scheme_using_ip} resulting in too many redirects.')
 
 
 async def resolve_name_to_ip(url):
@@ -322,26 +344,24 @@ async def resolve_name_to_ip(url):
         print(f'DNS query for {url} is too long.')
 
 
-async def http_get_request(url):
-    ip = await resolve_name_to_ip(url)
+async def http_get_request(host):
+    ip = await resolve_name_to_ip(host)
     if ip is None:
         return
-    ip = 'http://' + ip
-    http_response = await get_request(ip)
-    if http_response:
-        http_response.append('http://' + url)
-        return http_response
+    url_with_scheme_using_ip = 'http://' + ip
+    url_with_scheme_using_hostname = 'http://' + host
+    http_response = await get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, host)
+    return http_response
 
 
-async def https_get_request(url):
-    ip = await resolve_name_to_ip(url)
+async def https_get_request(host):
+    ip = await resolve_name_to_ip(host)
     if ip is None:
         return
-    ip = 'https://' + ip
-    https_response = await get_request(ip)
-    if https_response:
-        https_response.append('https://' + url)
-        return https_response
+    url_with_scheme_using_ip = 'https://' + ip
+    url_with_scheme_using_hostname = 'https://' + host
+    https_response = await get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, host)
+    return https_response
 
 
 async def check_hostnames_over_http_and_https(new_subdomains):
@@ -354,9 +374,9 @@ async def check_hostnames_over_http_and_https(new_subdomains):
             .replace('*.', '')
         http_url = await http_get_request(domain)
         https_url = await https_get_request(domain)
-        if http_url is not None:
+        if http_url:
             dns_results.append(http_url)
-        elif https_url is not None:
+        elif https_url:
             dns_results.append(https_url)
         print(dns_results)
 
@@ -373,12 +393,15 @@ def check_and_insert_url(http_responses):
     with sqlite3.connect(db_path) as conn:
         c = conn.cursor()
 
+        # [response.status, response.content_length, response.content_type, ip, has_form, page_title, response.url]
         c.execute('''
             CREATE TABLE IF NOT EXISTS urls (
                 status_code INTEGER,
                 content_length INTEGER,
                 content_type TEXT,
                 ip_url TEXT,
+                has_form INTEGER,
+                page_title TEXT,
                 dns_url TEXT PRIMARY KEY
             )
         ''')
@@ -396,7 +419,7 @@ def check_and_insert_url(http_responses):
 
         def custom_url_sort(item_):
             # the hostname based url
-            item = item_[4]
+            item = item_[-1]
             # compare the fqdn and not the URI
             return item.split('://')[-1]
 
@@ -423,17 +446,17 @@ def check_and_insert_url(http_responses):
         http_responses.sort(key=itemgetter(1), reverse=True)
 
         for http_response in http_responses:
-            status_code, content_length, content_type, ip_url, dns_url = http_response
+            status_code, content_length, content_type, ip_url, has_form, page_title, dns_url = http_response
             c.execute('SELECT dns_url FROM urls WHERE dns_url = ?;', (dns_url,))
             result = c.fetchone()
 
             if result is None:
                 print(f'New URL found. {dns_url}')
-                http_response_formatted_for_slack = f'{status_code},{content_length},{content_type},{ip_url},{dns_url}'
+                http_response_formatted_for_slack = f'{status_code},{content_length},{content_type},{ip_url},{has_form},{page_title},{dns_url}'
                 slack(http_response_formatted_for_slack)
                 c.execute('''
-                            INSERT INTO urls (status_code, content_length, content_type, ip_url, dns_url) 
-                            VALUES (?, ?, ?, ?, ?)
+                            INSERT INTO urls (status_code, content_length, content_type, ip_url, has_form, page_title, dns_url) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
                         ''', http_response)
             else:
                 print(f'{dns_url} already exists in the database.')
