@@ -28,7 +28,7 @@ from tld.exceptions import TldBadUrl, TldDomainNotFound
 
 from config import *
 
-version = "1.0.1"
+version = "1.1.1"
 requests.packages.urllib3.disable_warnings()
 
 
@@ -80,7 +80,7 @@ def slack(data):  # posting to Slack
     if not response.ok:
         error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
                                                                                      response.text)
-        error_log(error, enable_logging)
+        error_log(error)
     if slack_sleep_enabled:
         time.sleep(1)
 
@@ -90,7 +90,7 @@ def send_healthcheck_to_slack():
     slack(HEALTHCHECK_MESSAGE)
 
 
-def error_log(error, enable_logging):  # log errors and post them to slack channel
+def error_log(error):  # log errors and post them to slack channel
     print(colored("\n[!] We encountered a small issue, please check error logging slack channel.", "red"))
     webhook_url = errorlogging_webhook
     slack_data = {'text': '```' + error + '```'}
@@ -102,60 +102,76 @@ def error_log(error, enable_logging):  # log errors and post them to slack chann
     if response.status_code != 200:
         error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
                                                                                      response.text)
-        error_log(error, enable_logging)
+        error_log(error)
 
 
-class cert_database(object):  # Connecting to crt.sh public API to retrieve subdomains
-    print('Attempting to gather information via crt.sh')
-    global enable_logging
-
-    def lookup(self, domain, wildcard=True):
-        try:
-            # connecting to crt.sh postgres database to retrieve subdomains.
-            unique_domains = set()
-            domain = domain.replace('%25.', '')
-            conn = psycopg2.connect("dbname={0} user={1} host={2}".format(DB_NAME, DB_USER, DB_HOST))
-            conn.autocommit = True
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT ci.NAME_VALUE NAME_VALUE FROM certificate_identity ci WHERE ci.NAME_TYPE = 'dNSName' AND reverse(lower(ci.NAME_VALUE)) LIKE reverse(lower('%{}'));".format(
-                    domain))
-            for result in cursor.fetchall():
-                matches = re.findall(r"\'(.+?)\'", str(result))
-                for subdomain in matches:
-                    try:
-                        if get_fld("https://" + subdomain) == domain:
-                            unique_domains.add(subdomain.lower())
-                    except:
-                        pass
-            return sorted(unique_domains)
-        except:
-            base_url = "https://crt.sh/?q={}&output=json"
-            if wildcard:
-                domain = "%25.{}".format(domain)
-                url = base_url.format(domain)
-            subdomains = set()
-            user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:64.0) Gecko/20100101 Firefox/64.0'
-            retries = 3
-            timeout = 30
-            backoff = 2
-            success = False
-            while retries != 0 and success is not True:
+def crt_sh_query_via_sql(domain):
+    # note: globals into config.toml and print() -> logging.info()
+    print('Querying crt.sh via SQL.')
+    # connecting to crt.sh postgres database to retrieve subdomains.
+    unique_domains = set()
+    domain = domain.replace('%25.', '')
+    try:
+        conn = psycopg2.connect("dbname={0} user={1} host={2}".format(DB_NAME, DB_USER, DB_HOST))
+        conn.autocommit = True
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT ci.NAME_VALUE NAME_VALUE FROM certificate_identity ci WHERE ci.NAME_TYPE = 'dNSName' AND reverse(lower(ci.NAME_VALUE)) LIKE reverse(lower('%{}'));".format(
+                domain))
+        for result in cursor.fetchall():
+            matches = re.findall(r"\'(.+?)\'", str(result))
+            for subdomain in matches:
                 try:
-                    req = requests.get(url, headers={'User-Agent': user_agent}, timeout=timeout,
-                                       verify=False)
-                    if req.status_code == 200:
-                        success = True
-                        content = req.content.decode('utf-8')
-                        data = json.loads(content)
-                        for subdomain in data:
-                            subdomains.add(subdomain["name_value"].lower())
-                        return sorted(subdomains)
-                except (TimeoutError, ReadTimeout):
-                    success = False
-                    retries -= 1
-                    timeout *= backoff
-                    print('Request to https://crt.sh timed out.')
+                    if get_fld("https://" + subdomain) == domain:
+                        unique_domains.add(subdomain.lower())
+                except TldDomainNotFound as tld_error:
+                    print('Error processing {subomain}.')
+                    print(f'{tld_error}.')
+    except psycopg2.DatabaseError as db_error:
+        print(f'Error interacting with database. {db_error.pgcode} {db_error.pgerror}')
+    except psycopg2.InterfaceError as db_interface_error:
+        print(f'Database interface error. {db_interface_error.pgcode} {db_interface_error.pgerror}')
+
+    return sorted(unique_domains)
+
+
+def crt_sh_query_over_http(domain, wildcard=True):
+    print('Querying crt.sh via HTTP.')
+    base_url = "https://crt.sh/?q={}&output=json"
+    if wildcard:
+        domain = "%25.{}".format(domain)
+        url = base_url.format(domain)
+    subdomains = set()
+    user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:64.0) Gecko/20100101 Firefox/64.0'
+    retries = 3
+    timeout = 30
+    backoff = 2
+    success = False
+    while retries != 0 and success is not True:
+        try:
+            req = requests.get(url, headers={'User-Agent': user_agent}, timeout=timeout,
+                               verify=False)
+            if req.status_code == 200:
+                success = True
+                content = req.content.decode('utf-8')
+                data = json.loads(content)
+                for subdomain in data:
+                    subdomains.add(subdomain["name_value"].lower())
+                return sorted(subdomains)
+        except (TimeoutError, ReadTimeout):
+            success = False
+            retries -= 1
+            timeout *= backoff
+            print('Request to https://crt.sh timed out.')
+
+
+def lookup(domain, wildcard=True):
+    lookup_data = crt_sh_query_via_sql(domain)
+    if lookup_data:
+        return lookup_data
+    lookup_data = crt_sh_query_over_http(domain, wildcard)
+    if lookup_data:
+        return lookup_data
 
 
 def queuing():  # using the queue for multithreading purposes
@@ -195,7 +211,7 @@ def adding_new_domain(q1):  # adds a new domain to the monitoring list
                     print(
                         colored("[!] The domain name {} is already being monitored.".format(domain_to_monitor), "red"))
                     sys.exit(1)
-            response = cert_database().lookup(domain_to_monitor)
+            response = lookup(domain_to_monitor)
             if response:
                 with open("./output/" + domain_to_monitor.lower() + ".txt",
                           "a") as subdomains:  # saving a copy of current subdomains
@@ -215,7 +231,7 @@ def adding_new_domain(q1):  # adds a new domain to the monitoring list
         try:
             line = q1.get(timeout=10)
             if not os.path.isfile("./output/" + line.lower() + ".txt"):
-                response = cert_database().lookup(line)
+                response = lookup(line)
                 if response:
                     with open("./output/" + line.lower() + ".txt", "a") as subdomains:
                         for subdomain in response:
@@ -236,7 +252,7 @@ def check_new_subdomains(
             line = q2.get(timeout=10)
             print("[*] Checking {}".format(line))
             with open("./output/" + line.lower() + "_tmp.txt", "a") as subs:
-                response = cert_database().lookup(line)
+                response = lookup(line)
                 if response:
                     for subdomain in response:
                         subs.write(subdomain + "\n")
@@ -248,7 +264,6 @@ def check_new_subdomains(
 
 def compare_files_diff(
         domain_to_monitor):  # compares the temporary text file with previously stored copy to check if there are new subdomains
-    global enable_logging
     if domain_to_monitor is None:
         result = []
         with open("domains.txt", "r") as targets:
@@ -270,7 +285,9 @@ def compare_files_diff(
                 except:
                     error = "There was an error opening one of the files: {} or {}".format(
                         domain_to_monitor + '.txt', domain_to_monitor + '_tmp.txt')
-                    error_log(error, enable_logging)
+                    error_log(error)
+                    # Unfortunately this is still part of control flow. The mess with the text files is likely the next thing
+                    # I will be refactoring.
                     os.system("rm -f ./output/{}".format(line.replace('\n', '') + "_tmp.txt"))
             return (result)
 
