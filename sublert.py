@@ -8,6 +8,7 @@ import random
 import re
 import sqlite3
 import time
+from ipaddress import ip_address
 from operator import itemgetter
 
 import aiohttp
@@ -23,7 +24,7 @@ from tld.exceptions import TldBadUrl, TldDomainNotFound
 
 from config import *
 
-version = "1.2.1"
+version = "1.3.1"
 requests.packages.urllib3.disable_warnings()
 
 
@@ -235,7 +236,7 @@ async def resolve_name_to_ip(url):
 
 async def http_get_request(host):
     ip = await resolve_name_to_ip(host)
-    if ip is None:
+    if ip is None or ip_address(ip).is_private:
         return
     url_with_scheme_using_ip = 'http://' + ip
     url_with_scheme_using_hostname = 'http://' + host
@@ -245,7 +246,7 @@ async def http_get_request(host):
 
 async def https_get_request(host):
     ip = await resolve_name_to_ip(host)
-    if ip is None:
+    if ip is None or ip_address(ip).is_private:
         return
     url_with_scheme_using_ip = 'https://' + ip
     url_with_scheme_using_hostname = 'https://' + host
