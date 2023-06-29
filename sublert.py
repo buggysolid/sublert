@@ -211,6 +211,10 @@ async def get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, 
             print(f'Connection reset by peer when requesting {url_with_scheme_using_ip}')
         except aiohttp.client_exceptions.TooManyRedirects:
             print(f'Request for {url_with_scheme_using_ip} resulting in too many redirects.')
+        except aiohttp.http_exceptions.LineTooLong:
+            print(f'Request for {url_with_scheme_using_ip} returned too many lines.')
+        except aiohttp.client_exceptions.ClientResponseError:
+            print(f'Something went wrong on the client side when processing request for {url_with_scheme_using_ip}')
 
 
 async def resolve_name_to_ip(url):
