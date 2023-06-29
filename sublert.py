@@ -2,16 +2,11 @@
 
 import argparse
 import asyncio
-import difflib
 import json
 import os
-import pathlib
-import queue as queue
 import random
 import re
 import sqlite3
-import sys
-import threading
 import time
 from operator import itemgetter
 
@@ -28,7 +23,7 @@ from tld.exceptions import TldBadUrl, TldDomainNotFound
 
 from config import *
 
-version = "1.1.1"
+version = "1.2.1"
 requests.packages.urllib3.disable_warnings()
 
 
@@ -107,32 +102,27 @@ def error_log(error):  # log errors and post them to slack channel
 
 def crt_sh_query_via_sql(domain):
     # note: globals into config.toml and print() -> logging.info()
-    print('Querying crt.sh via SQL.')
+    print(f'Querying crt.sh for {domain} via SQL.')
     # connecting to crt.sh postgres database to retrieve subdomains.
     unique_domains = set()
-    domain = domain.replace('%25.', '')
     try:
         conn = psycopg2.connect("dbname={0} user={1} host={2}".format(DB_NAME, DB_USER, DB_HOST))
         conn.autocommit = True
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT ci.NAME_VALUE NAME_VALUE FROM certificate_identity ci WHERE ci.NAME_TYPE = 'dNSName' AND reverse(lower(ci.NAME_VALUE)) LIKE reverse(lower('%{}'));".format(
+            "SELECT ci.NAME_VALUE NAME_VALUE FROM certificate_identity ci WHERE ci.NAME_TYPE = 'dNSName' AND reverse(lower(ci.NAME_VALUE)) LIKE reverse(lower('%.{}'));".format(
                 domain))
         for result in cursor.fetchall():
-            matches = re.findall(r"\'(.+?)\'", str(result))
-            for subdomain in matches:
-                try:
-                    if get_fld("https://" + subdomain) == domain:
-                        unique_domains.add(subdomain.lower())
-                except TldDomainNotFound as tld_error:
-                    print('Error processing {subomain}.')
-                    print(f'{tld_error}.')
+            if len(result) == 1:
+                # First entry in tuple
+                domain = result[0]
+                unique_domains.update([domain])
     except psycopg2.DatabaseError as db_error:
         print(f'Error interacting with database. {db_error.pgcode} {db_error.pgerror}')
     except psycopg2.InterfaceError as db_interface_error:
         print(f'Database interface error. {db_interface_error.pgcode} {db_interface_error.pgerror}')
 
-    return sorted(unique_domains)
+    return unique_domains
 
 
 def crt_sh_query_over_http(domain, wildcard=True):
@@ -157,7 +147,7 @@ def crt_sh_query_over_http(domain, wildcard=True):
                 data = json.loads(content)
                 for subdomain in data:
                     subdomains.add(subdomain["name_value"].lower())
-                return sorted(subdomains)
+                return subdomains
         except (TimeoutError, ReadTimeout):
             success = False
             retries -= 1
@@ -172,124 +162,6 @@ def lookup(domain, wildcard=True):
     lookup_data = crt_sh_query_over_http(domain, wildcard)
     if lookup_data:
         return lookup_data
-
-
-def queuing():  # using the queue for multithreading purposes
-    global domain_to_monitor
-    global q1
-    global q2
-    q1 = queue.Queue(maxsize=0)
-    q2 = queue.Queue(maxsize=0)
-    if domain_to_monitor:
-        pass
-    # Move this to a CLI check, there is no point in getting this far and then checking.
-    elif not pathlib.Path('domains.txt').exists():
-        print(colored("[!] Please consider adding a list of domains to monitor first.", "red"))
-        sys.exit(1)
-    else:
-        with open("domains.txt", "r") as targets:
-            for line in targets:
-                if line != "":
-                    q1.put(line.replace('\n', ''))
-                    q2.put(line.replace('\n', ''))
-                else:
-                    pass
-
-
-def adding_new_domain(q1):  # adds a new domain to the monitoring list
-    unique_list = []
-    global domain_to_monitor
-    global input
-    if domain_to_monitor:
-        if not os.path.isfile('./domains.txt'):  # check if domains.txt exist, if not create a new one
-            os.system("touch domains.txt")
-        else:
-            pass
-        with open("domains.txt", "r+") as domains:  # checking domain name isn't already monitored
-            for line in domains:
-                if domain_to_monitor == line.replace('\n', ''):
-                    print(
-                        colored("[!] The domain name {} is already being monitored.".format(domain_to_monitor), "red"))
-                    sys.exit(1)
-            response = lookup(domain_to_monitor)
-            if response:
-                with open("./output/" + domain_to_monitor.lower() + ".txt",
-                          "a") as subdomains:  # saving a copy of current subdomains
-                    for subdomain in response:
-                        subdomains.write(subdomain + "\n")
-                with open("domains.txt", "a") as domains:  # fetching subdomains if not monitored
-                    domain_to_monitor_ = f'{domain_to_monitor.lower()}\n'
-                    domains.write(domain_to_monitor_)
-                    print(colored("\n[+] Adding {} to the monitored list of domains.\n".format(domain_to_monitor),
-                                  "yellow"))
-            else:
-                print(colored(
-                    "\n[!] Added but unfortunately, we couldn't find any subdomain for {}".format(domain_to_monitor),
-                    "red"))
-                sys.exit(1)
-    else:  # checks if a domain is monitored but has no text file saved in ./output
-        try:
-            line = q1.get(timeout=10)
-            if not os.path.isfile("./output/" + line.lower() + ".txt"):
-                response = lookup(line)
-                if response:
-                    with open("./output/" + line.lower() + ".txt", "a") as subdomains:
-                        for subdomain in response:
-                            subdomains.write(subdomain + "\n")
-                else:
-                    pass
-            else:
-                pass
-        except queue.Empty:
-            pass
-
-
-def check_new_subdomains(
-        q2):  # retrieves new list of subdomains and stores a temporary text file for comparaison purposes
-    global domain_to_monitor
-    if domain_to_monitor is None:
-        try:
-            line = q2.get(timeout=10)
-            print("[*] Checking {}".format(line))
-            with open("./output/" + line.lower() + "_tmp.txt", "a") as subs:
-                response = lookup(line)
-                if response:
-                    for subdomain in response:
-                        subs.write(subdomain + "\n")
-        except queue.Empty:
-            pass
-    else:
-        pass
-
-
-def compare_files_diff(
-        domain_to_monitor):  # compares the temporary text file with previously stored copy to check if there are new subdomains
-    if domain_to_monitor is None:
-        result = []
-        with open("domains.txt", "r") as targets:
-            for line in targets:
-                domain_to_monitor = line.replace('\n', '')
-                try:
-                    file1 = open("./output/" + domain_to_monitor.lower() + '.txt', 'r')
-                    file2 = open("./output/" + domain_to_monitor.lower() + '_tmp.txt', 'r')
-                    diff = difflib.ndiff(file1.readlines(), file2.readlines())
-                    changes = [l for l in diff if l.startswith('+ ')]  # check if there are new items/subdomains
-                    newdiff = []
-                    for c in changes:
-                        c = c \
-                            .replace('+ ', '') \
-                            .replace('*.', '') \
-                            .replace('\n', '')
-                        result.append(c)
-                        result = list(set(result))  # remove duplicates
-                except:
-                    error = "There was an error opening one of the files: {} or {}".format(
-                        domain_to_monitor + '.txt', domain_to_monitor + '_tmp.txt')
-                    error_log(error)
-                    # Unfortunately this is still part of control flow. The mess with the text files is likely the next thing
-                    # I will be refactoring.
-                    os.system("rm -f ./output/{}".format(line.replace('\n', '') + "_tmp.txt"))
-            return (result)
 
 
 async def get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, hostname):
@@ -381,28 +253,18 @@ async def https_get_request(host):
     return https_response
 
 
-async def check_hostnames_over_http_and_https(new_subdomains):
-    dns_results = list()
-    subdomains_to_resolve = new_subdomains
+async def check_hostnames_over_http_and_https(domains):
     print(colored("\n[!] Performing HTTP and HTTPs GET requests. Please do not interrupt!", "red"))
-    for domain in subdomains_to_resolve:
-        domain = domain \
-            .replace('+ ', '') \
-            .replace('*.', '')
+    dns_results = []
+    for domain in domains:
+        domain = domain.replace('*.', '')
         http_url = await http_get_request(domain)
         https_url = await https_get_request(domain)
         if http_url:
             dns_results.append(http_url)
         elif https_url:
             dns_results.append(https_url)
-        print(dns_results)
-
-    if dns_results:
-        return posting_to_slack(None, True, dns_results)  # Slack new subdomains with DNS ouput
-
-
-def at_channel():  # control slack @channel
-    return ("<!channel> " if at_channel_enabled else "")
+    return dns_results
 
 
 def check_and_insert_url(http_responses):
@@ -481,45 +343,50 @@ def check_and_insert_url(http_responses):
             conn.commit()
 
 
-def posting_to_slack(result, dns_resolve, dns_output):  # sending result to slack workplace
-    global domain_to_monitor
-    global new_subdomains
-    if dns_resolve:
-        check_and_insert_url(dns_output)
-    elif result:
-        check_and_insert_url(result)
+def check_for_new_domains(domains):
+    db_path = 'output/urls.db'
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute('CREATE TABLE IF NOT EXISTS crt_sh_domains (domain_name text PRIMARY KEY)')
 
+    new_domains = []
+    for domain in domains:
+        # Check if the domain is already in the database
+        c.execute('SELECT domain_name FROM crt_sh_domains WHERE domain_name=?', (domain,))
+        data = c.fetchone()
 
-def multithreading(threads):
-    global domain_to_monitor
-    threads_list = []
-    if not domain_to_monitor:
-        num = sum(1 for line in open("domains.txt"))  # minimum threads executed equals the number of monitored domains
-        for i in range(max(threads, num)):
-            if not (q1.empty() and q2.empty()):
-                t1 = threading.Thread(target=adding_new_domain, args=(q1,))
-                t2 = threading.Thread(target=check_new_subdomains, args=(q2,))
-                t1.start()
-                t2.start()
-                threads_list.append(t1)
-                threads_list.append(t2)
-    else:
-        adding_new_domain(domain_to_monitor)
+        # If the domain is not in the database, insert it
+        if data:
+            print(f'Domain {domain} already exists in the database.')
+        else:
+            c.execute('INSERT INTO crt_sh_domains (domain_name) VALUES (?)', (domain,))
+            new_domains.append(domain)
+            print(f'New domain {domain} added to database.')
 
-    for t in threads_list:
-        t.join()
+    conn.commit()
+    conn.close()
+
+    return new_domains
 
 
 if __name__ == '__main__':
-
     domain_to_monitor = parse_args().target
-
-    queuing()
-    multithreading(parse_args().threads)
-    new_subdomains = compare_files_diff(domain_to_monitor)
-
-    if not domain_to_monitor and new_subdomains:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(check_hostnames_over_http_and_https(new_subdomains))
+    new_domains = []
+    if domain_to_monitor is not None:
+        # I am aware this means there could be dups in the domains.txt file. I am find with that for now.
+        with open('domains.txt', 'a') as domains_file:
+            domains_file.write(f'{domain_to_monitor}\n')
+        domains_from_cert_lookup = lookup(domain_to_monitor)
+        new_domains = check_for_new_domains(domains_from_cert_lookup)
     else:
-        posting_to_slack(new_subdomains, False, None)
+        with open('domains.txt') as domains_file:
+            sld_from_domains_file = [domain.strip('\n') for domain in domains_file.readlines()]
+            domains_from_cert_lookup = set()
+            for domain in sld_from_domains_file:
+                domains_from_cert_lookup.update(lookup(domain))
+            new_domains = check_for_new_domains(domains_from_cert_lookup)
+
+    loop = asyncio.get_event_loop()
+    if new_domains:
+        dns_results = loop.run_until_complete(check_hostnames_over_http_and_https(new_domains))
+        check_and_insert_url(dns_results)
