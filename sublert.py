@@ -3,7 +3,7 @@
 import argparse
 import asyncio
 import json
-import os
+import logging
 import random
 import re
 import sqlite3
@@ -18,7 +18,6 @@ from aiohttp import InvalidURL, ServerDisconnectedError, ClientConnectorError
 from dns import asyncresolver
 from dns.resolver import NXDOMAIN, NoAnswer, LifetimeTimeout, NoNameservers, YXDOMAIN
 from requests import ReadTimeout
-from termcolor import colored
 from tld import get_fld
 from tld.exceptions import TldBadUrl, TldDomainNotFound
 import tomli
@@ -27,6 +26,7 @@ from config import *
 
 version = "1.4.1"
 requests.packages.urllib3.disable_warnings()
+
 
 class URLValidationAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
@@ -47,13 +47,12 @@ def parse_args():
 
 
 def domain_sanity_check(domain):  # Verify the domain name sanity
+    logger = logging.getLogger(f"sublert-http")
     try:
         domain_ = get_fld(domain, fix_protocol=True)
         return domain_
     except (TldBadUrl, TldDomainNotFound):
-        print(colored(
-            "[!] Incorrect domain format. Please follow this format: example.com, http(s)://example.com, www.example.com",
-            "red"))
+        logger.error('Badly formatted domain provided.', domain)
 
 
 def slack(data):  # posting to Slack
@@ -78,7 +77,8 @@ def send_healthcheck_to_slack():
 
 
 def error_log(error):  # log errors and post them to slack channel
-    print(colored("\n[!] We encountered a small issue, please check error logging slack channel.", "red"))
+    logger = logging.getLogger(f"sublert-http")
+    logger.error("\n[!] We encountered a small issue, please check error logging slack channel.")
     webhook_url = errorlogging_webhook
     slack_data = {'text': '```' + error + '```'}
     response = requests.post(
@@ -94,7 +94,8 @@ def error_log(error):  # log errors and post them to slack channel
 
 def crt_sh_query_via_sql(domain):
     # note: globals into config.toml and print() -> logging.info()
-    print(f'Querying crt.sh for {domain} via SQL.')
+    logger = logging.getLogger(f"sublert-http")
+    logger.info('Querying crt.sh for %s via SQL.', domain)
     # connecting to crt.sh postgres database to retrieve subdomains.
     unique_domains = set()
     try:
@@ -110,15 +111,16 @@ def crt_sh_query_via_sql(domain):
                 domain = result[0]
                 unique_domains.update([domain])
     except psycopg2.DatabaseError as db_error:
-        print(f'Error interacting with database. {db_error.pgcode} {db_error.pgerror}')
+        logger.error('Error interacting with database. {} {}' % db_error.pgcode, db_error.pgerror)
     except psycopg2.InterfaceError as db_interface_error:
-        print(f'Database interface error. {db_interface_error.pgcode} {db_interface_error.pgerror}')
+        logger.error('Database interface error. {} {}' % db_interface_error.pgcode, db_interface_error.pgerror)
 
     return unique_domains
 
 
 def crt_sh_query_over_http(domain, wildcard=True):
-    print('Querying crt.sh via HTTP.')
+    logger = logging.getLogger(f"sublert-http")
+    logger.info('Querying crt.sh via HTTP.')
     base_url = "https://crt.sh/?q={}&output=json"
     if wildcard:
         domain = "%25.{}".format(domain)
@@ -144,7 +146,7 @@ def crt_sh_query_over_http(domain, wildcard=True):
             success = False
             retries -= 1
             timeout *= backoff
-            print('Request to https://crt.sh timed out.')
+            logger.error('Request to https://crt.sh timed out.')
 
 
 def lookup(domain, wildcard=True):
@@ -169,6 +171,7 @@ async def get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, 
     form_pattern = re.compile(r"<form[\s\S]*?</form>")
     # SQLite DB has no native boolean type so I am just using 0 and 1.
     has_form = 0
+    logger = logging.getLogger(f"sublert-http")
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
         try:
             async with session.get(url_with_scheme_using_ip, ssl=False) as response:
@@ -188,28 +191,29 @@ async def get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, 
                         has_form, page_title,
                         url_with_scheme_using_hostname]
         except InvalidURL:
-            print(f'Malformed URL {url_with_scheme_using_ip}')
+            logger.error('Malformed URL: %s', url_with_scheme_using_ip)
         except ClientConnectorError as client_error:
-            print(f'Can not connect to {url_with_scheme_using_ip}')
-            print(client_error)
+            logger.error('Cannot connect to: %s', url_with_scheme_using_ip)
         except ServerDisconnectedError:
-            print(f'Server disconnected when trying {url_with_scheme_using_ip}')
+            logger.error('Server disconnected when trying: %s', url_with_scheme_using_ip)
         except AssertionError:
-            print(f'Something went wrong when trying to resolve {url_with_scheme_using_ip}')
-        except asyncio.exceptions.TimeoutError:
-            print(f'Timed out while waiting for response from {url_with_scheme_using_ip}')
+            logger.error('Something went wrong when trying to resolve: %s', url_with_scheme_using_ip)
+        except TimeoutError:
+            logger.error('Timed out while waiting for response from %s', url_with_scheme_using_ip)
         except aiohttp.client_exceptions.ClientOSError:
-            print(f'Connection reset by peer when requesting {url_with_scheme_using_ip}')
+            logger.error('Connection reset by peer when requesting %s', url_with_scheme_using_ip)
         except aiohttp.client_exceptions.TooManyRedirects:
-            print(f'Request for {url_with_scheme_using_ip} resulting in too many redirects.')
+            logger.error('Request for %s resulting in too many redirects.', url_with_scheme_using_ip)
         except aiohttp.http_exceptions.LineTooLong:
-            print(f'Request for {url_with_scheme_using_ip} returned too many lines.')
+            logger.error('Request for %s returned too many lines.', url_with_scheme_using_ip)
         except aiohttp.client_exceptions.ClientResponseError:
-            print(f'Something went wrong on the client side when processing request for {url_with_scheme_using_ip}')
+            logger.error('Something went wrong on the client side when processing request for %s',
+                         url_with_scheme_using_ip)
 
 
 async def resolve_name_to_ip(url):
     resolver = asyncresolver.Resolver()
+    logger = logging.getLogger(f"sublert-http")
     try:
         rdata = await resolver.resolve(url)
         if rdata.rrset:
@@ -218,15 +222,15 @@ async def resolve_name_to_ip(url):
             elif len(rdata.rrset) == 1:
                 return rdata.rrset.to_rdataset()[0].address
     except NXDOMAIN:
-        print(f'{url} does not exist.')
+        logger.error('%s does not exist.', url)
     except NoAnswer:
-        print(f'There was no answer from the remote nameservers for {url}')
+        logger.error('There was no answer from the remote nameservers for %s', url)
     except LifetimeTimeout:
-        print(f'DNS query for {url} timed out.')
+        logger.error('DNS query for %s timed out.', url)
     except NoNameservers:
-        print(f'DNS query for {url} SERVFAIL.')
+        logger.error('DNS query for %s SERVFAIL.', url)
     except YXDOMAIN:
-        print(f'DNS query for {url} is too long.')
+        logger.error('DNS query for %s is too long.', url)
 
 
 async def http_get_request(host):
@@ -250,7 +254,8 @@ async def https_get_request(host):
 
 
 async def check_hostnames_over_http_and_https(domains):
-    print(colored("\n[!] Performing HTTP and HTTPs GET requests. Please do not interrupt!", "red"))
+    logger = logging.getLogger(f"sublert-http")
+    logger.info("\n[!] Performing HTTP and HTTPs GET requests. Please do not interrupt!")
     dns_results = []
     for domain in domains:
         domain = domain.replace('*.', '')
@@ -320,13 +325,15 @@ def check_and_insert_url(http_responses):
         # content_length
         http_responses.sort(key=itemgetter(1), reverse=True)
 
+        logger = logging.getLogger(f"sublert-http")
+
         for http_response in http_responses:
             status_code, content_length, content_type, ip_url, has_form, page_title, dns_url = http_response
             c.execute('SELECT dns_url FROM urls WHERE dns_url = ?;', (dns_url,))
             result = c.fetchone()
 
             if result is None:
-                print(f'New URL found. {dns_url}')
+                logger.info('New URL found. %s', dns_url)
                 http_response_formatted_for_slack = f'{status_code},{content_length},{content_type},{ip_url},{has_form},{page_title},{dns_url}'
                 slack(http_response_formatted_for_slack)
                 c.execute('''
@@ -334,7 +341,7 @@ def check_and_insert_url(http_responses):
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                         ''', http_response)
             else:
-                print(f'{dns_url} already exists in the database.')
+                logger.info('%s already exists in the database.', dns_url)
 
             conn.commit()
 
@@ -346,6 +353,7 @@ def check_for_new_domains(domains):
     c.execute('CREATE TABLE IF NOT EXISTS crt_sh_domains (domain_name text PRIMARY KEY)')
 
     new_domains = []
+    logger = logging.getLogger(f"sublert-http")
     for domain in domains:
         # Check if the domain is already in the database
         c.execute('SELECT domain_name FROM crt_sh_domains WHERE domain_name=?', (domain,))
@@ -353,11 +361,11 @@ def check_for_new_domains(domains):
 
         # If the domain is not in the database, insert it
         if data:
-            print(f'Domain {domain} already exists in the database.')
+            logger.info('Domain %s already exists in the database.', domain)
         else:
             c.execute('INSERT INTO crt_sh_domains (domain_name) VALUES (?)', (domain,))
             new_domains.append(domain)
-            print(f'New domain {domain} added to database.')
+            logger.info('New domain %s added to database.', domain)
 
     conn.commit()
     conn.close()
@@ -365,8 +373,22 @@ def check_for_new_domains(domains):
     return new_domains
 
 
-if __name__ == '__main__':
+def main():
     domain_to_monitor = parse_args().target
+
+    # this will go into its own logging module
+    logger = logging.getLogger(f"sublert-http")
+    logger.setLevel(logging.DEBUG)
+    fh = logging.FileHandler('service.log')
+    fh.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+
     new_domains = []
     if domain_to_monitor is not None:
         # I am aware this means there could be dups in the domains.txt file. I am find with that for now.
@@ -386,3 +408,7 @@ if __name__ == '__main__':
     if new_domains:
         dns_results = loop.run_until_complete(check_hostnames_over_http_and_https(new_domains))
         check_and_insert_url(dns_results)
+
+
+if __name__ == '__main__':
+    main()
