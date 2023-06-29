@@ -21,16 +21,12 @@ from requests import ReadTimeout
 from termcolor import colored
 from tld import get_fld
 from tld.exceptions import TldBadUrl, TldDomainNotFound
+import tomli
 
 from config import *
 
-version = "1.3.1"
+version = "1.4.1"
 requests.packages.urllib3.disable_warnings()
-
-
-def cpu_core_count():
-    return os.cpu_count()
-
 
 class URLValidationAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
@@ -47,11 +43,6 @@ def parse_args():
                         action=URLValidationAction,
                         help="Domain to monitor. E.g: yahoo.com",
                         required=False)
-    parser.add_argument('-t', '--threads',
-                        dest="threads",
-                        help="Number of concurrent threads to use. Default: 10",
-                        type=int,
-                        default=cpu_core_count())
     return parser.parse_args()
 
 
