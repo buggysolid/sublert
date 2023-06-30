@@ -20,8 +20,6 @@ class URLValidationAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         if domain_sanity_check(values):
             setattr(namespace, self.dest, values)
-        else:
-            exit(-1)
 
 
 def parse_args():
