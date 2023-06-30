@@ -14,18 +14,14 @@ from operator import itemgetter
 import aiohttp
 import psycopg2
 import requests
-from aiohttp import InvalidURL, ServerDisconnectedError, ClientConnectorError
+from aiohttp import InvalidURL, ServerDisconnectedError, ClientConnectorError, client_exceptions, http_exceptions
 from dns import asyncresolver
 from dns.resolver import NXDOMAIN, NoAnswer, LifetimeTimeout, NoNameservers, YXDOMAIN
 from requests import ReadTimeout
 from tld import get_fld
 from tld.exceptions import TldBadUrl, TldDomainNotFound
-import tomli
 
-from config import *
-
-version = "1.4.1"
-requests.packages.urllib3.disable_warnings()
+from lib.config import get_config
 
 
 class URLValidationAction(argparse.Action):
@@ -56,7 +52,8 @@ def domain_sanity_check(domain):  # Verify the domain name sanity
 
 
 def slack(data):  # posting to Slack
-    webhook_url = posting_webhook
+    config = get_config()
+    webhook_url = config.get('posting_webhook')
     slack_data = {'text': data}
     response = requests.post(
         webhook_url,
@@ -67,8 +64,9 @@ def slack(data):  # posting to Slack
         error = "Request to slack returned an error {}, the response is:\n{}".format(response.status_code,
                                                                                      response.text)
         error_log(error)
-    if slack_sleep_enabled:
-        time.sleep(1)
+        # should really go through the whole retry, backoff, timeout dance but this will do. Maybe add a jitter to the
+        # random range selection.
+        time.sleep(random.choice(range(1, 3)))
 
 
 def send_healthcheck_to_slack():
@@ -79,7 +77,8 @@ def send_healthcheck_to_slack():
 def error_log(error):  # log errors and post them to slack channel
     logger = logging.getLogger(f"sublert-http")
     logger.error("\n[!] We encountered a small issue, please check error logging slack channel.")
-    webhook_url = errorlogging_webhook
+    config = get_config()
+    webhook_url = config.get('errorlogging_webhook')
     slack_data = {'text': '```' + error + '```'}
     response = requests.post(
         webhook_url,
@@ -98,12 +97,17 @@ def crt_sh_query_via_sql(domain):
     logger.info('Querying crt.sh for %s via SQL.', domain)
     # connecting to crt.sh postgres database to retrieve subdomains.
     unique_domains = set()
+    config = get_config()
     try:
-        conn = psycopg2.connect("dbname={0} user={1} host={2}".format(DB_NAME, DB_USER, DB_HOST))
+        db_name = config.get('DB_NAME')
+        db_host = config.get('DB_HOST')
+        db_user = config.get('DB_USER')
+        conn = psycopg2.connect("dbname={0} user={1} host={2}".format(db_name, db_user, db_host))
         conn.autocommit = True
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT ci.NAME_VALUE NAME_VALUE FROM certificate_identity ci WHERE ci.NAME_TYPE = 'dNSName' AND reverse(lower(ci.NAME_VALUE)) LIKE reverse(lower('%.{}'));".format(
+            "SELECT ci.NAME_VALUE NAME_VALUE FROM certificate_identity ci WHERE ci.NAME_TYPE = 'dNSName' AND reverse("
+            "lower(ci.NAME_VALUE)) LIKE reverse(lower('%.{}'));".format(
                 domain))
         for result in cursor.fetchall():
             if len(result) == 1:
@@ -121,10 +125,7 @@ def crt_sh_query_via_sql(domain):
 def crt_sh_query_over_http(domain, wildcard=True):
     logger = logging.getLogger(f"sublert-http")
     logger.info('Querying crt.sh via HTTP.')
-    base_url = "https://crt.sh/?q={}&output=json"
-    if wildcard:
-        domain = "%25.{}".format(domain)
-        url = base_url.format(domain)
+    crt_sh_url = f"https://crt.sh/?q=%.{domain}&output=json"
     subdomains = set()
     user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:64.0) Gecko/20100101 Firefox/64.0'
     retries = 3
@@ -133,7 +134,7 @@ def crt_sh_query_over_http(domain, wildcard=True):
     success = False
     while retries != 0 and success is not True:
         try:
-            req = requests.get(url, headers={'User-Agent': user_agent}, timeout=timeout,
+            req = requests.get(crt_sh_url, headers={'User-Agent': user_agent}, timeout=timeout,
                                verify=False)
             if req.status_code == 200:
                 success = True
@@ -391,9 +392,17 @@ def main():
 
     new_domains = []
     if domain_to_monitor is not None:
+        number_of_domains_in_file = 0
+        with open('domains.txt') as count_lines_domains_file:
+            for line in count_lines_domains_file:
+                number_of_domains_in_file += 1
+        logger.info(number_of_domains_in_file)
         # I am aware this means there could be dups in the domains.txt file. I am find with that for now.
         with open('domains.txt', 'a') as domains_file:
-            domains_file.write(f'{domain_to_monitor}\n')
+            if number_of_domains_in_file >= 1:
+                domains_file.write(f'\n{domain_to_monitor}')
+            elif number_of_domains_in_file < 1:
+                domains_file.write(f'{domain_to_monitor}')
         domains_from_cert_lookup = lookup(domain_to_monitor)
         new_domains = check_for_new_domains(domains_from_cert_lookup)
     else:

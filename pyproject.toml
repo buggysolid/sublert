@@ -1,0 +1,9 @@
+name = "sublert-http"
+version = "1.5.1"
+description = "Sublert-http is a security and reconnaissance tool which leverages certificate transparency to automatically monitor new subdomains deployed by specific organizations and issued TLS/SSL certificate."
+license = "MIT"
+authors = [
+    "Ciaran <contact@sendemailtome.eu>",
+]
+[build-system]
+requires = ["python ~= 3.10"]
