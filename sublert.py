@@ -82,7 +82,6 @@ def main():
         with open('domains.txt') as count_lines_domains_file:
             for line in count_lines_domains_file:
                 number_of_domains_in_file += 1
-        logger.info(number_of_domains_in_file)
         # I am aware this means there could be dups in the domains.txt file. I am find with that for now.
         with open('domains.txt', 'a') as domains_file:
             if number_of_domains_in_file >= 1:
