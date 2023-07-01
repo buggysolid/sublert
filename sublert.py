@@ -17,6 +17,8 @@ class URLValidationAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         if domain_sanity_check(values):
             setattr(namespace, self.dest, values)
+        else:
+            exit(-1)
 
 
 def parse_args():
@@ -92,6 +94,9 @@ def main():
     else:
         with open('domains.txt') as domains_file:
             sld_from_domains_file = [domain.strip('\n') for domain in domains_file.readlines()]
+            if len(sld_from_domains_file) == 0:
+                logger.info('The domains.txt file is empty. Add some domains to monitor with python sublert.py -u')
+                exit(-1)
             domains_from_cert_lookup = set()
             for domain in sld_from_domains_file:
                 domains_from_cert_lookup.update(lookup(domain))
