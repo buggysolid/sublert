@@ -1,10 +1,9 @@
-import asyncio
 import logging
 import re
 from ipaddress import ip_address
 
 import aiohttp
-from aiohttp import InvalidURL, ClientConnectorError, ServerDisconnectedError, client_exceptions, http_exceptions
+from aiohttp import InvalidURL, ClientConnectorError, ServerDisconnectedError
 
 from lib.dns import resolve_name_to_ip
 
@@ -49,7 +48,7 @@ async def get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, 
             logger.error('Server disconnected when trying: %s', url_with_scheme_using_ip)
         except AssertionError:
             logger.error('Something went wrong when trying to resolve: %s', url_with_scheme_using_ip)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error('Timed out while waiting for response from %s', url_with_scheme_using_ip)
         except aiohttp.client_exceptions.ClientOSError:
             logger.error('Connection reset by peer when requesting %s', url_with_scheme_using_ip)

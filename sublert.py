@@ -3,14 +3,11 @@
 import argparse
 import asyncio
 import logging
-import time
 
-import schedule
 from tld import get_fld
 from tld.exceptions import TldBadUrl, TldDomainNotFound
 
 from lib.certificate import lookup
-from lib.config import get_config
 from lib.database import check_and_insert_url, check_for_new_domains
 from lib.http import https_get_request, http_get_request
 from lib.slack import slack
@@ -61,7 +58,9 @@ async def check_hostnames_over_http_and_https(domains):
     return dns_results
 
 
-def main(domain_to_monitor=''):
+def main():
+    domain_to_monitor = parse_args().target
+
     # this will go into its own logging module
     logger = logging.getLogger(f"sublert-http")
     logger.setLevel(logging.DEBUG)
@@ -76,12 +75,12 @@ def main(domain_to_monitor=''):
     logger.addHandler(ch)
 
     new_domains = []
-    if domain_to_monitor:
+    if domain_to_monitor is not None:
         number_of_domains_in_file = 0
         with open('domains.txt') as count_lines_domains_file:
             for line in count_lines_domains_file:
                 number_of_domains_in_file += 1
-        logger.debug(number_of_domains_in_file)
+        logger.info(number_of_domains_in_file)
         # I am aware this means there could be dups in the domains.txt file. I am find with that for now.
         with open('domains.txt', 'a') as domains_file:
             if number_of_domains_in_file >= 1:
@@ -105,17 +104,4 @@ def main(domain_to_monitor=''):
 
 
 if __name__ == '__main__':
-    domain_to_monitor = parse_args().target
-    if domain_to_monitor:
-        main(domain_to_monitor)
-        # I am assuming here that if someone runs the tool with python sublert.py -u
-        # that they want the tool to run once and give any results immediately and then exit.
-        # I don't think maybe people would expect it to run and then go into the wait loop and
-        # continue running.
-        exit(0)
-    config = get_config()
-    hours = config.get('hours')
-    schedule.every(hours).hours.do(main)
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    main()
