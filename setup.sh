@@ -19,11 +19,4 @@ else
   exit
 fi
 
-python3 -m venv runtime && source runtime/bin/activate && pip install -r requirements.txt
-chmod -R 755 runtime/bin/activate
-
-cp run.sh /tmp/
-
-crontab config/sublert.cron
-
 systemctl enable crond && systemctl start crond

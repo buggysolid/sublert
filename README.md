@@ -65,10 +65,17 @@ vi config/settings.toml
 sudo ./setup.sh
 ```
 
+### Setup Python runtime and install crontab.
+
+```
+python3 -m venv runtime && source runtime/bin/activate && pip install -r requirements.txt
+cp run.sh /tmp/
+crontab config/sublert.cron
+```
+
 ### Add a domain to monitor.
 
 ```
-source runtime/bin/activate
 python sublert.py -u just-eat.io
 ```
 
