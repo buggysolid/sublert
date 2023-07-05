@@ -61,7 +61,7 @@ async def check_hostnames_over_http_and_https(domains):
 
 
 def main():
-    domain_to_monitor = parse_args().target
+    domain_from_cli_argument = parse_args().target
 
     # this will go into its own logging module
     logger = logging.getLogger(f"sublert-http")
@@ -77,29 +77,19 @@ def main():
     logger.addHandler(ch)
 
     new_domains = []
-    if domain_to_monitor is not None:
-        number_of_domains_in_file = 0
-        with open('domains.txt') as count_lines_domains_file:
-            for line in count_lines_domains_file:
-                number_of_domains_in_file += 1
-        # I am aware this means there could be dups in the domains.txt file. I am find with that for now.
+    if domain_from_cli_argument:
         with open('domains.txt', 'a') as domains_file:
-            if number_of_domains_in_file >= 1:
-                domains_file.write(f'\n{domain_to_monitor}')
-            elif number_of_domains_in_file < 1:
-                domains_file.write(f'{domain_to_monitor}')
-        domains_from_cert_lookup = lookup(domain_to_monitor)
+            domains_file.write(f'{domain_from_cli_argument}\n')
+
+    with open('domains.txt') as domains_file:
+        sld_from_domains_file = [domain.strip('\n') for domain in domains_file.readlines()]
+        if len(sld_from_domains_file) == 0:
+            logger.info('The domains.txt file is empty. Add some domains to monitor with python sublert.py -u')
+            exit(-1)
+        domains_from_cert_lookup = set()
+        for domain in sld_from_domains_file:
+            domains_from_cert_lookup.update(lookup(domain))
         new_domains = check_for_new_domains(domains_from_cert_lookup)
-    else:
-        with open('domains.txt') as domains_file:
-            sld_from_domains_file = [domain.strip('\n') for domain in domains_file.readlines()]
-            if len(sld_from_domains_file) == 0:
-                logger.info('The domains.txt file is empty. Add some domains to monitor with python sublert.py -u')
-                exit(-1)
-            domains_from_cert_lookup = set()
-            for domain in sld_from_domains_file:
-                domains_from_cert_lookup.update(lookup(domain))
-            new_domains = check_for_new_domains(domains_from_cert_lookup)
 
     loop = asyncio.get_event_loop()
     if new_domains:
