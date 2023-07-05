@@ -4,13 +4,10 @@ import argparse
 import asyncio
 import logging
 
-from tld import get_fld
-from tld.exceptions import TldBadUrl, TldDomainNotFound
-
 from lib.certificate import lookup
 from lib.database import check_and_insert_url, check_for_new_domains
-from lib.http import https_get_request, http_get_request
-from lib.slack import slack
+from lib.domain import domain_sanity_check
+from lib.http import check_hostnames_over_http_and_https
 
 
 class URLValidationAction(argparse.Action):
@@ -29,35 +26,6 @@ def parse_args():
                         help="Domain to monitor. E.g: yahoo.com",
                         required=False)
     return parser.parse_args()
-
-
-def domain_sanity_check(domain):  # Verify the domain name sanity
-    logger = logging.getLogger(f"sublert-http")
-    try:
-        domain_ = get_fld(domain, fix_protocol=True)
-        return domain_
-    except (TldBadUrl, TldDomainNotFound):
-        logger.error('Badly formatted domain provided.', domain)
-
-
-def send_healthcheck_to_slack():
-    HEALTHCHECK_MESSAGE = 'Sublert is running.'
-    slack(HEALTHCHECK_MESSAGE)
-
-
-async def check_hostnames_over_http_and_https(domains):
-    logger = logging.getLogger(f"sublert-http")
-    logger.info("\n[!] Performing HTTP and HTTPs GET requests. Please do not interrupt!")
-    dns_results = []
-    for domain in domains:
-        domain = domain.replace('*.', '')
-        http_url = await http_get_request(domain)
-        https_url = await https_get_request(domain)
-        if http_url:
-            dns_results.append(http_url)
-        elif https_url:
-            dns_results.append(https_url)
-    return dns_results
 
 
 def main():

@@ -80,3 +80,18 @@ async def http_get_request(host):
     url_with_scheme_using_hostname = 'http://' + host
     http_response = await get_request(url_with_scheme_using_ip, url_with_scheme_using_hostname, host)
     return http_response
+
+
+async def check_hostnames_over_http_and_https(domains):
+    logger = logging.getLogger(f"sublert-http")
+    logger.info("\n[!] Performing HTTP and HTTPs GET requests. Please do not interrupt!")
+    dns_results = []
+    for domain in domains:
+        domain = domain.replace('*.', '')
+        http_url = await http_get_request(domain)
+        https_url = await https_get_request(domain)
+        if http_url:
+            dns_results.append(http_url)
+        elif https_url:
+            dns_results.append(https_url)
+    return dns_results

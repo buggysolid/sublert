@@ -41,3 +41,8 @@ def slack(data):  # posting to Slack
         # should really go through the whole retry, backoff, timeout dance but this will do. Maybe add a jitter to the
         # random range selection.
         time.sleep(random.choice(range(1, 3)))
+
+
+def send_healthcheck_to_slack():
+    HEALTHCHECK_MESSAGE = 'Sublert is running.'
+    slack(HEALTHCHECK_MESSAGE)
