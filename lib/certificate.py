@@ -8,13 +8,9 @@ from requests import ReadTimeout
 from lib.config import get_config
 
 
-def lookup(domain, wildcard=True):
+def lookup(domain):
     lookup_data = _crt_sh_query_via_sql(domain)
-    if lookup_data:
-        return lookup_data
-    lookup_data = _crt_sh_query_over_http(domain, wildcard)
-    if lookup_data:
-        return lookup_data
+    return lookup_data
 
 
 def _crt_sh_query_via_sql(domain):
@@ -46,31 +42,3 @@ def _crt_sh_query_via_sql(domain):
         logger.error('Database interface error. {} {}' % db_interface_error.pgcode, db_interface_error.pgerror)
 
     return unique_domains
-
-
-def _crt_sh_query_over_http(domain, wildcard=True):
-    logger = logging.getLogger(f"sublert-http")
-    logger.info('Querying crt.sh via HTTP.')
-    crt_sh_url = f"https://crt.sh/?q=%.{domain}&output=json"
-    subdomains = set()
-    user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:64.0) Gecko/20100101 Firefox/64.0'
-    retries = 3
-    timeout = 30
-    backoff = 2
-    success = False
-    while retries != 0 and success is not True:
-        try:
-            req = requests.get(crt_sh_url, headers={'User-Agent': user_agent}, timeout=timeout,
-                               verify=False)
-            if req.status_code == 200:
-                success = True
-                content = req.content.decode('utf-8')
-                data = json.loads(content)
-                for subdomain in data:
-                    subdomains.add(subdomain["name_value"].lower())
-                return subdomains
-        except (TimeoutError, ReadTimeout):
-            success = False
-            retries -= 1
-            timeout *= backoff
-            logger.error('Request to https://crt.sh timed out.')
