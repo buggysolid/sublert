@@ -1,6 +1,6 @@
 import logging
 import time
-from random import random
+import random
 
 import psycopg2
 
@@ -25,6 +25,12 @@ def _crt_sh_query_via_sql(domain):
         db_user = config.get('DB_USER')
         conn = psycopg2.connect("dbname={0} user={1} host={2}".format(db_name, db_user, db_host))
         conn.autocommit = True
+        # Currently the number of lines in domains.txt defines the number of times this function will be called. So
+        # we are O(n) where n is the number of lines in domains.txt meaning this is linear. Ignoring how the DB calls
+        # work and network.
+        #
+        # Let's be kind to the DBMS and sleep between queries.
+        time.sleep(random.choice(range(1, 4)))
         with conn.cursor() as cursor:
             cursor.execute(
                 "SELECT ci.NAME_VALUE NAME_VALUE FROM certificate_identity ci WHERE ci.NAME_TYPE = 'dNSName' AND reverse("
